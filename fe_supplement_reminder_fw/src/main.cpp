@@ -1257,19 +1257,19 @@ void handlePhysicalButton() {
     }
 }
 
-void syncNTPtoRTC() {
+bool syncNTPtoRTC() {
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     struct tm timeinfo;
     Serial.print("[NTP] Menghubungi NTP server...");
     
     int retry = 0;
-    while (!getLocalTime(&timeinfo) && retry < 10) {
+    while (!getLocalTime(&timeinfo) && retry < 8) {
         Serial.print(".");
-        delay(500);
+        delay(300);
         retry++;
     }
 
-    if (retry < 10) {
+    if (retry < 8) {
         Serial.println("\n[NTP] Waktu NTP berhasil didapatkan.");
         rtc.adjust(DateTime(timeinfo.tm_year + 1900, 
                             timeinfo.tm_mon + 1, 
@@ -1278,10 +1278,15 @@ void syncNTPtoRTC() {
                             timeinfo.tm_min, 
                             timeinfo.tm_sec));
         Serial.println("[RTC] Waktu RTC berhasil disinkronkan!");
+        return true;
     } else {
-        Serial.println("\n[NTP] Gagal mengambil waktu NTP.");
+        Serial.println("\n[NTP] Gagal mengambil waktu NTP (akan dicoba kembali secara berkala).");
+        return false;
     }
 }
+
+// Status sinkronisasi NTP
+bool ntpSynchronized = false;
 
 // ==================== SETUP ====================
 
@@ -1343,7 +1348,7 @@ void setup() {
         beep(1, 150, 0, 3000);
         digitalWrite(LED_PIN, HIGH);
 
-        syncNTPtoRTC();
+        ntpSynchronized = syncNTPtoRTC();
 
         // Lewati validasi sertifikat SSL agar hemat RAM dan koneksi cepat
         secured_client.setInsecure();
@@ -1355,6 +1360,51 @@ void setup() {
 void loop() {
     handlePhysicalButton();
     updateAlarmBuzzer();
+
+    // 0. Wi-Fi Watchdog & Auto-Reconnect non-blocking
+    static unsigned long lastWifiCheck = 0;
+    static unsigned long wifiDisconnectedStart = 0;
+    static unsigned long lastNtpRetry = 0;
+    static unsigned long lastNtpDailySync = 0;
+
+    if (millis() - lastWifiCheck >= 3000) {
+        lastWifiCheck = millis();
+        if (WiFi.status() != WL_CONNECTED) {
+            if (wifiDisconnectedStart == 0) {
+                wifiDisconnectedStart = millis();
+                Serial.println("[WiFi] Koneksi terputus! Memulai monitoring reconnection...");
+                digitalWrite(LED_PIN, LOW);
+            } else if (millis() - wifiDisconnectedStart >= 12000) {
+                Serial.println("[WiFi] Mencoba menyambung kembali (WiFi.reconnect())...");
+                WiFi.reconnect();
+                wifiDisconnectedStart = millis(); // jeda 12 detik antar percobaan
+            }
+        } else {
+            if (wifiDisconnectedStart != 0) {
+                Serial.printf("[WiFi] Terhubung kembali! IP: %s\n", WiFi.localIP().toString().c_str());
+                wifiDisconnectedStart = 0;
+                digitalWrite(LED_PIN, HIGH);
+                if (!ntpSynchronized) {
+                    ntpSynchronized = syncNTPtoRTC();
+                }
+            }
+        }
+    }
+
+    // Sinkronisasi ulang NTP:
+    // A. Retry setiap 60 detik jika saat boot awal gagal
+    // B. Re-sync otomatis setiap 24 jam untuk menjaga akurasi RTC DS3231
+    if (WiFi.status() == WL_CONNECTED) {
+        if (!ntpSynchronized && (millis() - lastNtpRetry >= 60000)) {
+            lastNtpRetry = millis();
+            Serial.println("[NTP] Mencoba ulang sinkronisasi NTP...");
+            ntpSynchronized = syncNTPtoRTC();
+        } else if (ntpSynchronized && (millis() - lastNtpDailySync >= 86400000UL)) {
+            lastNtpDailySync = millis();
+            Serial.println("[NTP] Sinkronisasi berkala 24 jam ke RTC DS3231...");
+            syncNTPtoRTC();
+        }
+    }
 
     static unsigned long lastBotCheck = 0;
     static unsigned long lastClockPrint = 0;
