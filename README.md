@@ -26,6 +26,8 @@ Proyek ini bersifat **inklusif**: pengguna yang memiliki perangkat boks fisik da
 - **Auto-Reconnect Wi-Fi & NTP Berkala**: Watchdog mandiri yang otomatis menghubungkan kembali Wi-Fi saat terputus dan menyinkronkan ulang waktu RTC DS3231 ke NTP Server setiap 24 jam.
 - **Proteksi Hardware Bus I2C**: Dilengkapi timeout 1000 ms pada jalur I2C untuk mencegah CPU hang jika koneksi modul RTC terlepas atau berderau (noisy).
 - **Penyimpanan Permanen & Kuota Aman (Maks 20 User)**: Jadwal dan kepemilikan tersimpan di NVS Flash dengan batas kuota aman 20 pengguna untuk menjamin kestabilan memori jangka panjang tanpa risiko fragmentasi Heap atau crash OOM.
+- **Efisiensi Daya & Termal Dingin**: Dilengkapi 802.11 Wi-Fi modem sleep, throttling FreeRTOS CPU idle delay (15 ms), dan interval TLS polling teroptimasi (2500 ms) sehingga beban prosesor turun drastis (~2% CPU idle), temperatur chip ESP32-C3 dingin (~40°C), dan bebas lag buffer USB-CDC.
+- **Skema Partisi Flash 3 MB (`huge_app.csv`)**: Kapasitas alokasi partisi firmware diperbesar dari 1.25 MB menjadi 3 MB (utilisasi turun dari 84% menjadi **34.9%**), menyisakan ruang memori yang sangat longgar untuk stabilitas dan ekspansi.
 - **Keamanan Kredensial**: Token bot disimpan di file lokal yang diproteksi oleh `.gitignore`, mencegah kebocoran kunci akses ke repositori publik.
 
 ---

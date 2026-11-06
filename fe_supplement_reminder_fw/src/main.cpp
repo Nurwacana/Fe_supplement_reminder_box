@@ -1095,6 +1095,21 @@ void handleStopAlarm(const String& chat_id, const String& from_name) {
     }
 }
 
+void applyPresetSchedule(const String& chat_id, Subscriber* s, uint8_t daysMask, int hour, int minute, const char* label) {
+    if (daysMask != 0) s->daysMask = daysMask;
+    if (hour >= 0) s->hour = hour;
+    if (minute >= 0) s->minute = minute;
+    s->active = true;
+    saveSubscribers();
+
+    String msg;
+    msg.reserve(128);
+    msg = "✅ *Jadwal Diatur: ";
+    msg += label;
+    msg += "*\nStatus pengingat kini *Aktif* ✅";
+    bot.sendMessage(chat_id, msg, "Markdown");
+}
+
 void handleCallbackQuery(const String& chat_id, const String& from_name, const String& query_id, const String& data, int message_id) {
     bot.answerCallbackQuery(query_id, "Pilihan diterima!");
 
@@ -1184,40 +1199,16 @@ void handleCallbackQuery(const String& chat_id, const String& from_name, const S
     if (s == nullptr) return;
 
     if (data == "set_fri_20") {
-        s->daysMask = 32;
-        s->hour = 20;
-        s->minute = 0;
-        s->active = true;
-        saveSubscribers();
-        String msg = "✅ *Jadwal Diatur: Setiap Jumat 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
-        bot.sendMessage(chat_id, msg, "Markdown");
+        applyPresetSchedule(chat_id, s, 32, 20, 0, "Setiap Jumat 20:00 WIB");
     }
     else if (data == "set_daily_20") {
-        s->daysMask = 127;
-        s->hour = 20;
-        s->minute = 0;
-        s->active = true;
-        saveSubscribers();
-        String msg = "✅ *Jadwal Diatur: Setiap Hari 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
-        bot.sendMessage(chat_id, msg, "Markdown");
+        applyPresetSchedule(chat_id, s, 127, 20, 0, "Setiap Hari 20:00 WIB");
     }
     else if (data == "set_mwth_20") {
-        s->daysMask = ((1 << 1) | (1 << 3) | (1 << 4)); // Senin, Rabu, Kamis
-        s->hour = 20;
-        s->minute = 0;
-        s->active = true;
-        saveSubscribers();
-        String msg = "✅ *Jadwal Diatur: Senin, Rabu, Kamis 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
-        bot.sendMessage(chat_id, msg, "Markdown");
+        applyPresetSchedule(chat_id, s, ((1 << 1) | (1 << 3) | (1 << 4)), 20, 0, "Senin, Rabu, Kamis 20:00 WIB");
     }
     else if (data == "set_mth_20") {
-        s->daysMask = ((1 << 1) | (1 << 4)); // Senin & Kamis
-        s->hour = 20;
-        s->minute = 0;
-        s->active = true;
-        saveSubscribers();
-        String msg = "✅ *Jadwal Diatur: Senin & Kamis 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
-        bot.sendMessage(chat_id, msg, "Markdown");
+        applyPresetSchedule(chat_id, s, ((1 << 1) | (1 << 4)), 20, 0, "Senin & Kamis 20:00 WIB");
     }
     else if (data.startsWith("h_")) {
         // Format h_HH_MM
@@ -1228,27 +1219,26 @@ void handleCallbackQuery(const String& chat_id, const String& from_name, const S
         s->active = true;
         saveSubscribers();
 
-        String msg = "✅ *Jam Pengingat Diperbarui!*\n";
-        msg += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
-        msg += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
-        msg += "🔔 Status: *Aktif* ✅";
+        String msg;
+        msg.reserve(128);
+        msg = "✅ *Jam Pengingat Diperbarui!*\n⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n📅 Hari: *" + formatDays(s->daysMask) + "*\n🔔 Status: *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
     else if (data.startsWith("d_")) {
-        if (data == "d_fri") s->daysMask = 32;
-        else if (data == "d_daily") s->daysMask = 127;
-        else if (data == "d_mwth") s->daysMask = ((1 << 1) | (1 << 3) | (1 << 4));
-        else if (data == "d_mth") s->daysMask = ((1 << 1) | (1 << 4));
-        else if (data == "d_weekdays") s->daysMask = ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5));
-        else if (data == "d_weekend") s->daysMask = ((1 << 0) | (1 << 6));
+        uint8_t d = 32;
+        if (data == "d_daily") d = 127;
+        else if (data == "d_mwth") d = ((1 << 1) | (1 << 3) | (1 << 4));
+        else if (data == "d_mth") d = ((1 << 1) | (1 << 4));
+        else if (data == "d_weekdays") d = ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5));
+        else if (data == "d_weekend") d = ((1 << 0) | (1 << 6));
 
+        s->daysMask = d;
         s->active = true;
         saveSubscribers();
 
-        String msg = "✅ *Hari Pengingat Diperbarui!*\n";
-        msg += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
-        msg += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
-        msg += "🔔 Status: *Aktif* ✅";
+        String msg;
+        msg.reserve(128);
+        msg = "✅ *Hari Pengingat Diperbarui!*\n📅 Hari: *" + formatDays(s->daysMask) + "*\n⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n🔔 Status: *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
 }
@@ -1560,6 +1550,7 @@ void setup() {
 
     WiFi.mode(WIFI_AP_STA);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    WiFi.setSleep(true); // Aktifkan modem sleep Wi-Fi agar radio RF hemat daya dan tidak panas
 
     WiFiManager wm;
     wm.setAPCallback(configModeCallback);
@@ -1644,8 +1635,8 @@ void loop() {
     static unsigned long lastBotCheck = 0;
     static unsigned long lastClockPrint = 0;
 
-    // 1. Cek Pesan Masuk Telegram setiap 1.5 detik
-    if (WiFi.status() == WL_CONNECTED && millis() - lastBotCheck >= 1500) {
+    // 1. Cek Pesan Masuk Telegram setiap 2.5 detik (menghemat CPU mbedTLS crypto & mencegah chip panas)
+    if (WiFi.status() == WL_CONNECTED && millis() - lastBotCheck >= 2500) {
         lastBotCheck = millis();
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
         while (numNewMessages) {
@@ -1672,10 +1663,13 @@ void loop() {
             return; // Lewati siklus evaluasi pengingat agar tidak memicu alarm palsu
         }
 
-        Serial.printf("[%s] %04d-%02d-%02d %02d:%02d:%02d\n",
-                      daysOfTheWeek[now.dayOfTheWeek()],
-                      now.year(), now.month(), now.day(),
-                      now.hour(), now.minute(), now.second());
+        // Cetak serial berkala hanya saat menit berganti (mencegah banjir buffer USB-CDC yang bikin lag)
+        static int lastLoggedMin = -1;
+        if (now.minute() != lastLoggedMin) {
+            lastLoggedMin = now.minute();
+            Serial.printf("[Clock] %02d:%02d WIB | Free Heap: %u bytes\n",
+                          now.hour(), now.minute(), ESP.getFreeHeap());
+        }
 
         int currentDayOfWeek = now.dayOfTheWeek();
         int currentHour = now.hour();
@@ -1736,4 +1730,8 @@ void loop() {
             startAlarm();
         }
     }
+
+    // Istirahatkan core sebentar (15 ms) agar FreeRTOS IDLE task aktif
+    // Menurunkan suhu ESP32-C3 secara signifikan dan mencegah CPU 100% spin loop
+    delay(15);
 }
