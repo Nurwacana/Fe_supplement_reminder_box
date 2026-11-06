@@ -13,7 +13,7 @@
 
 // ==================== KONFIGURASI ====================
 
-// Muat BOT_TOKEN dari secrets.h (jangan commit file secrets.h ke git)
+// Muat BOT_TOKEN dari secrets.h
 #if __has_include("secrets.h")
 #include "secrets.h"
 #elif __has_include("include/secrets.h")
@@ -75,13 +75,48 @@ struct Subscriber {
     int lastTriggeredMin; // Menit terakhir alarm terpicu (-1 saat inisialisasi)
 };
 
+// ==================== IDENTITAS PERANGKAT & PEMILIK ====================
+
+String deviceId = "";
+String deviceOwnerChatId = "";
+String deviceOwnerName = "";
+
+bool isDeviceOwner(const String& chatId) {
+    return (deviceOwnerChatId.length() > 0 && deviceOwnerChatId == chatId);
+}
+
+void initDeviceId() {
+    #ifdef CUSTOM_DEVICE_ID
+    if (String(CUSTOM_DEVICE_ID).length() > 0) {
+        deviceId = String(CUSTOM_DEVICE_ID);
+        deviceId.toUpperCase();
+        Serial.printf("[Device] ID Perangkat (Kustom): %s\n", deviceId.c_str());
+        return;
+    }
+    #endif
+
+    uint64_t chipmac = ESP.getEfuseMac();
+    char buf[20];
+    snprintf(buf, sizeof(buf), "FEBOX-%02X%02X", (uint8_t)(chipmac >> 8), (uint8_t)(chipmac));
+    deviceId = String(buf);
+    deviceId.toUpperCase();
+    Serial.printf("[Device] ID Perangkat FEBOX: %s\n", deviceId.c_str());
+}
+
 Preferences prefs;
 std::vector<Subscriber> subscriberList;
+
+void saveDeviceOwner() {
+    prefs.begin("fe_bot", false);
+    prefs.putString("owner_chat", deviceOwnerChatId);
+    prefs.putString("owner_name", deviceOwnerName);
+    prefs.end();
+}
 
 // Keyboard Menu Utama (Reply Keyboard di bawah layar chat Telegram)
 const char MAIN_KEYBOARD[] = 
     "[[\"📋 Status & Jadwal\", \"⏰ Atur Jadwal\"],"
-    " [\"🔔 Berlangganan\", \"🔕 Berhenti\"],"
+    " [\"📦 Tautkan Boks\", \"🔔 Berlangganan\"],"
     " [\"🧪 Tes Alarm\", \"❓ Bantuan\"]]";
 
 // Inline Keyboards untuk Pengaturan Jadwal Interaktif
@@ -339,6 +374,8 @@ void saveSubscribers() {
 
 void loadSubscribers() {
     prefs.begin("fe_bot", false);
+    deviceOwnerChatId = prefs.getString("owner_chat", "");
+    deviceOwnerName = prefs.getString("owner_name", "");
     String data = prefs.getString("v2_subs", "");
 
     if (data.length() == 0) {
@@ -426,21 +463,137 @@ void sendScheduleMenu(const String& chat_id, const String& from_name) {
     bot.sendMessage(chat_id, helpText, "Markdown");
 }
 
+void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
+    if (isDeviceOwner(chat_id)) {
+        String msg = "📦 *STATUS PERANGKAT FEBOX*\n\n";
+        msg += "✅ *Boks ini telah tertaut ke akun Anda!*\n";
+        msg += "• ID Perangkat: `" + deviceId + "`\n";
+        msg += "• Pemilik Terdaftar: *" + deviceOwnerName + "*\n";
+        msg += "• Alarm Fisik (Buzzer): *Aktif untuk Anda* 🔊\n\n";
+        msg += "Setiap kali jadwal pengingat Anda tiba, boks fisik ini akan berbunyi dan LED akan menyala.\n\n";
+        msg += "💡 _Jika ingin melepaskan boks ini agar bisa digunakan akun lain, klik tombol di bawah atau ketik `/lepaskan`._";
+
+        String kb = "[ [{\"text\":\"🔓 Lepaskan Tautan Boks\",\"callback_data\":\"unpair_device\"}] ]";
+        bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", kb);
+    }
+    else if (deviceOwnerChatId.length() > 0) {
+        String msg = "📦 *STATUS PERANGKAT FEBOX*\n\n";
+        msg += "⚠️ *Boks Sedang Dimiliki Pengguna Lain*\n";
+        msg += "Boks fisik ini saat ini sudah ditautkan ke pengguna lain (*" + deviceOwnerName + "*).\n";
+        msg += "Satu boks fisik FEBOX hanya dapat dimiliki oleh 1 akun pengguna.\n\n";
+        msg += "📱 *Tetap Tenang!* Anda tetap dapat menggunakan bot ini untuk menerima pengingat rutin melalui notifikasi Telegram!\n\n";
+        msg += "💡 _Pemilik boks dapat me-reset kepemilikan dengan menekan tombol fisik boks selama 20 detik atau mengetik `/lepaskan`._";
+        bot.sendMessage(chat_id, msg, "Markdown");
+    }
+    else {
+        String msg = "📦 *PENAUTAN PERANGKAT FEBOX*\n\n";
+        msg += "Boks fisik FEBOX ini saat ini berstatus *Tersedia* (belum memiliki pemilik).\n\n";
+        msg += "Untuk menautkan boks fisik ini ke akun Anda, ketik:\n";
+        msg += "`/tautkan " + deviceId + "`\n\n";
+        msg += "Atau klik tombol cepat di bawah ini:";
+
+        String kb = "[ [{\"text\":\"🔗 Tautkan ke Boks Ini (" + deviceId + ")\",\"callback_data\":\"pair_current_device\"}] ]";
+        bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", kb);
+
+        String note = "📱 *Informasi Tambahan:*\nJika Anda tidak memiliki perangkat fisik FEBOX, Anda *tidak perlu* menautkan boks. Layanan pengingat via pesan Telegram tetap dapat Anda gunakan 100%!";
+        bot.sendMessage(chat_id, note, "Markdown");
+    }
+}
+
+void handlePairDevice(const String& chat_id, const String& from_name, String inputId) {
+    inputId.trim();
+    inputId.toUpperCase();
+
+    if (inputId == deviceId) {
+        if (deviceOwnerChatId.length() > 0 && deviceOwnerChatId != chat_id) {
+            String msg = "⚠️ *Boks Sudah Dimiliki Pengguna Lain*\n\n";
+            msg += "Boks fisik dengan ID `" + deviceId + "` saat ini sudah ditautkan ke akun *" + deviceOwnerName + "*.\n\n";
+            msg += "Satu boks fisik FEBOX hanya dapat dimiliki oleh satu pengguna.\n";
+            msg += "• Anda tetap dapat menikmati layanan pengingat gratis lewat Telegram bot ini.\n";
+            msg += "• Jika Anda adalah pemilik sah yang baru, silakan tekan tombol fisik pada boks selama 20 detik untuk me-reset kepemilikan.";
+            bot.sendMessage(chat_id, msg, "Markdown");
+            return;
+        }
+
+        if (isDeviceOwner(chat_id)) {
+            bot.sendMessage(chat_id, "ℹ️ Akun Anda sudah terdaftar sebagai pemilik resmi boks fisik `" + deviceId + "`.", "Markdown");
+            return;
+        }
+
+        // Tautkan device ke user ini
+        deviceOwnerChatId = chat_id;
+        deviceOwnerName = from_name;
+        saveDeviceOwner();
+
+        // Pastikan user terdaftar sebagai subscriber aktif
+        Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
+        s.active = true;
+        saveSubscribers();
+
+        // Audio feedback ceria pada alat fisik (2 nada tinggi)
+        beep(2, 100, 80, 3000);
+
+        String msg = "🎉 *BERHASIL MENAUTKAN PERANGKAT!* 📦\n\n";
+        msg += "Boks *FEBOX (" + deviceId + ")* kini resmi terhubung dengan akun Anda (*" + from_name + "*).\n\n";
+        msg += "🔊 *Fitur Unggulan Aktif:*\n";
+        msg += "• Alarm buzzer suara pada boks fisik akan berbunyi khusus saat jadwal minum obat Anda tiba!\n";
+        msg += "• Jadwal Anda: *" + formatDays(s.daysMask) + "* pukul *" + formatTime(s.hour, s.minute) + "*\n\n";
+        msg += "💡 _Untuk me-reset kepemilikan boks sewaktu-waktu, Anda bisa mengetik `/lepaskan` atau menekan tombol fisik boks selama 20 detik._";
+
+        bot.sendMessage(chat_id, msg, "Markdown");
+        Serial.printf("[Device] Boks %s berhasil ditautkan ke %s (%s)\n", deviceId.c_str(), from_name.c_str(), chat_id.c_str());
+    } else {
+        String msg = "❌ *ID Perangkat Salah / Tidak Sesuai*\n\n";
+        msg += "ID yang Anda masukkan (*" + inputId + "*) tidak cocok dengan perangkat ini.\n\n";
+        msg += "Pastikan Anda memasukkan ID yang tertera pada boks FEBOX Anda.\n";
+        msg += "_Contoh penggunaan:_ `/tautkan " + deviceId + "`";
+        bot.sendMessage(chat_id, msg, "Markdown");
+    }
+}
+
+void handleUnpairDevice(const String& chat_id, const String& from_name) {
+    if (!isDeviceOwner(chat_id)) {
+        bot.sendMessage(chat_id, "Akun Anda saat ini tidak sedang menautkan perangkat boks fisik FEBOX.", "");
+        return;
+    }
+
+    deviceOwnerChatId = "";
+    deviceOwnerName = "";
+    saveDeviceOwner();
+
+    // Feedback audio nada rendah 1x
+    beep(1, 250, 0, 1600);
+
+    String msg = "🔓 *Tautan Perangkat Berhasil Dilepas*\n\n";
+    msg += "Boks FEBOX (" + deviceId + ") kini berstatus bebas dan dapat didaftarkan oleh akun lain.\n\n";
+    msg += "📱 *Catatan:* Akun Anda tetap aktif berlangganan pengingat via notifikasi pesan Telegram.";
+    bot.sendMessage(chat_id, msg, "Markdown");
+    Serial.println("[Device] Tautan pemilik boks telah dilepas via Telegram.");
+}
+
 void sendStartMessage(const String& chat_id, const String& from_name) {
     Subscriber* s = findSubscriber(chat_id);
     bool isSubbed = (s != nullptr && s->active);
+    bool isOwner = isDeviceOwner(chat_id);
 
     String greeting = "👋 *Halo, " + from_name + "! Selamat datang di FEBOX* 🩸\n";
     greeting += "_(Smart Pillbox Pengingat Tablet Tambah Darah / Fe)_\n\n";
     greeting += "FEBOX membantu Anda meminum Tablet Tambah Darah secara tepat waktu demi mencegah dan mengatasi anemia.\n\n";
 
-    greeting += "📌 *Status Pengingat Anda:*\n";
+    greeting += "💡 *Model Layanan FEBOX:*\n";
+    greeting += "1. 📱 *Pengguna Telegram:* Siapa pun dapat menerima notifikasi pengingat tepat waktu secara gratis.\n";
+    greeting += "2. 📦 *Pemilik Boks Fisik:* Boks fisik FEBOX dapat ditautkan ke 1 akun pengguna agar alarm buzzer bersuara saat jam minum tiba.\n\n";
+
+    greeting += "📌 *Status Akun Anda:*\n";
     if (isSubbed) {
-        greeting += "✅ *Aktif Berlangganan*\n";
-        greeting += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
-        greeting += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n\n";
+        greeting += "• Pengingat: *Aktif (" + formatDays(s->daysMask) + " " + formatTime(s->hour, s->minute) + ")*\n";
     } else {
-        greeting += "❌ _Belum Berlangganan (Pengingat Mati)_\n\n";
+        greeting += "• Pengingat: ❌ _Belum Berlangganan_\n";
+    }
+    if (isOwner) {
+        greeting += "• Perangkat: ✅ *Pemilik Boks (" + deviceId + ")*\n\n";
+    } else {
+        greeting += "• Perangkat: 📱 _Layanan Telegram (Belum Menautkan Boks)_\n\n";
     }
 
     greeting += "Silakan pilih salah satu menu di bawah ini untuk memulai:";
@@ -448,15 +601,18 @@ void sendStartMessage(const String& chat_id, const String& from_name) {
     // 1. Tampilkan reply keyboard (tombol permanen di bawah layar obrolan)
     bot.sendMessageWithReplyKeyboard(chat_id, greeting, "Markdown", MAIN_KEYBOARD, true);
 
-    // 2. Berikan tombol aksi cepat jika belum berlangganan
+    // 2. Berikan tombol aksi cepat jika belum berlangganan atau belum menautkan boks
+    String quickKeyboard = "[";
     if (!isSubbed) {
-        String quickKeyboard = "["
-            "[{\"text\":\"🔔 Langganan Cepat (Tiap Jumat 20:00)\",\"callback_data\":\"set_fri_20\"}],"
-            "[{\"text\":\"⏰ Atur Jadwal Sendiri\",\"callback_data\":\"menu_schedule\"}],"
-            "[{\"text\":\"📋 Cek Status Lengkap\",\"callback_data\":\"menu_status\"}]"
-        "]";
-        bot.sendMessageWithInlineKeyboard(chat_id, "💡 *Pilihan Aksi Cepat:*", "Markdown", quickKeyboard);
+        quickKeyboard += "[{\"text\":\"🔔 Langganan Cepat (Tiap Jumat 20:00)\",\"callback_data\":\"set_fri_20\"}],";
     }
+    if (!isOwner && deviceOwnerChatId.length() == 0) {
+        quickKeyboard += "[{\"text\":\"📦 Tautkan Boks Fisik (" + deviceId + ")\",\"callback_data\":\"pair_current_device\"}],";
+    }
+    quickKeyboard += "[{\"text\":\"⏰ Atur Jadwal Sendiri\",\"callback_data\":\"menu_schedule\"}],"
+                     "[{\"text\":\"📋 Cek Status Lengkap\",\"callback_data\":\"menu_status\"}]"
+                     "]";
+    bot.sendMessageWithInlineKeyboard(chat_id, "💡 *Pilihan Aksi Cepat:*", "Markdown", quickKeyboard);
 }
 
 void sendStatus(const String& chat_id, const String& from_name) {
@@ -474,19 +630,35 @@ void sendStatus(const String& chat_id, const String& from_name) {
     snprintf(dateBuf, sizeof(dateBuf), "%s, %02d %s %04d", 
              daysOfTheWeek[dayIdx], now.day(), monthsOfTheYear[monthIdx], now.year());
 
+    bool isOwner = isDeviceOwner(chat_id);
+
     String rep = "📋 *STATUS PENGINGAT FEBOX*\n";
     rep += "━━━━━━━━━━━━━━━━━━━━\n";
     rep += "👤 Nama: *" + from_name + "*\n";
     if (s != nullptr && s->active) {
-        rep += "🔔 Status: *Aktif Berlangganan* ✅\n";
+        rep += "🔔 Pengingat: *Aktif Berlangganan* ✅\n";
         rep += "📅 Jadwal Hari: *" + formatDays(s->daysMask) + "*\n";
         rep += "⏰ Jadwal Jam: *" + formatTime(s->hour, s->minute) + "*\n";
     } else {
-        rep += "🔔 Status: *Nonaktif / Belum Langganan* ❌\n";
+        rep += "🔔 Pengingat: *Nonaktif / Belum Langganan* ❌\n";
         if (s != nullptr) {
             rep += "📅 Tersimpan: " + formatDays(s->daysMask) + " pukul " + formatTime(s->hour, s->minute) + "\n";
         }
-        rep += "_Ketik /subscribe atau klik tombol di bawah untuk mengaktifkan._\n";
+        rep += "_Ketik /subscribe untuk mengaktifkan pengingat._\n";
+    }
+    rep += "━━━━━━━━━━━━━━━━━━━━\n";
+    rep += "📦 *Perangkat Fisik:*\n";
+    if (isOwner) {
+        rep += "✅ *Tertaut ke Boks Fisik (`" + deviceId + "`)*\n";
+        rep += "🔊 Alarm Buzzer: *Aktif berbunyi untuk Anda*\n";
+    } else {
+        rep += "📱 *Layanan Telegram Saja (Tanpa Boks Fisik)*\n";
+        rep += "🔊 Alarm Buzzer: *Hanya notifikasi pesan Telegram*\n";
+        if (deviceOwnerChatId.length() == 0) {
+            rep += "💡 _Boks fisik tersedia! Ketik `/tautkan " + deviceId + "` untuk menghubungkan boks._\n";
+        } else {
+            rep += "ℹ️ _Boks fisik sedang digunakan oleh user lain._\n";
+        }
     }
     rep += "━━━━━━━━━━━━━━━━━━━━\n";
     rep += "🕒 *Waktu Box:* " + String(clockBuf) + "\n";
@@ -500,19 +672,20 @@ void sendHelp(const String& chat_id) {
     String help = "📖 *PANDUAN & BANTUAN FEBOX* 🩸\n\n";
     help += "*Daftar Perintah Bot:*\n";
     help += "• `/start` - Buka menu utama & cek status awal\n";
-    help += "• `/status` - Cek jadwal Anda & waktu RTC perangkat\n";
-    help += "• `/jadwal` - Buka menu pemilihan jadwal interaktif\n";
-    help += "• `/jadwal <hari> <jam>` - Set hari & jam kustom sekaligus\n";
-    help += "   _Contoh:_ `/jadwal jumat 20:00`\n";
-    help += "   _Contoh:_ `/jadwal senin,rabu,kamis 20:30`\n";
-    help += "   _Contoh:_ `/jadwal tiap hari 19:00`\n";
+    help += "• `/status` - Cek jadwal & status tautan boks\n";
+    help += "• `/jadwal` - Menu pemilihan jadwal interaktif\n";
+    help += "• `/jadwal <hari> <jam>` - Set hari & jam kustom _(contoh: `/jadwal jumat 20:00`)_\n";
     help += "• `/jam <HH:MM>` - Ganti jam saja _(contoh: `/jam 20:30`)_\n";
-    help += "• `/hari <hari>` - Ganti hari saja _(contoh: `/hari jumat`)_\n";
+    help += "• `/hari <hari>` - Ganti hari saja _(contoh: `/hari senin,kamis`)_\n";
+    help += "• `/tautkan <ID>` - Tautkan boks fisik _(contoh: `/tautkan " + deviceId + "`)_\n";
+    help += "• `/lepaskan` - Lepaskan tautan boks fisik Anda\n";
     help += "• `/subscribe` - Aktifkan pengingat\n";
     help += "• `/unsubscribe` - Nonaktifkan pengingat\n";
-    help += "• `/tes_alarm` - Uji coba buzzer pengingat\n\n";
+    help += "• `/tes_alarm` - Uji coba buzzer (khusus pemilik boks)\n\n";
+    help += "🔘 *Reset Fisik Boks (20 Detik):*\n";
+    help += "Tekan tombol fisik pada boks selama 20 detik untuk menghapus data pemilik. Pemilik lama akan menerima notifikasi Telegram bahwa boks telah terlepas.\n\n";
     help += "💡 *Tips Minum Tablet Tambah Darah (Fe):*\n";
-    help += "1. Dianjurkan diminum malam hari setelah makan / menjelang tidur untuk meminimalkan rasa mual.\n";
+    help += "1. Minum malam hari setelah makan / menjelang tidur untuk meminimalkan rasa mual.\n";
     help += "2. Minum dengan segelas air putih atau jus jeruk (Vitamin C meningkatkan penyerapan zat besi).\n";
     help += "3. Jangan diminum bersama teh, kopi, atau susu karena dapat menghambat penyerapan.";
 
@@ -681,7 +854,16 @@ void handleCallbackQuery(const String& chat_id, const String& from_name, const S
 
     Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
 
-    if (data == "set_fri_20") {
+    if (data == "pair_current_device") {
+        handlePairDevice(chat_id, from_name, deviceId);
+    }
+    else if (data == "unpair_device") {
+        handleUnpairDevice(chat_id, from_name);
+    }
+    else if (data == "menu_device") {
+        sendDeviceLinkMenu(chat_id, from_name);
+    }
+    else if (data == "set_fri_20") {
         s.daysMask = 32;
         s.hour = 20;
         s.minute = 0;
@@ -785,6 +967,16 @@ void handleTextMessage(const String& chat_id, const String& from_name, const Str
     else if (textLower == "/jadwal" || textLower == "/atur_jadwal" || textLower == "⏰ atur jadwal") {
         sendScheduleMenu(chat_id, from_name);
     }
+    else if (textLower == "/tautkan" || textLower == "📦 tautkan boks" || textLower == "/pair") {
+        sendDeviceLinkMenu(chat_id, from_name);
+    }
+    else if (textLower.startsWith("/tautkan ") || textLower.startsWith("/pair ")) {
+        String inputId = text.substring(text.indexOf(' ') + 1);
+        handlePairDevice(chat_id, from_name, inputId);
+    }
+    else if (textLower == "/lepaskan" || textLower == "/unpair") {
+        handleUnpairDevice(chat_id, from_name);
+    }
     else if (textLower.startsWith("/jadwal ")) {
         handleCustomJadwal(chat_id, from_name, text.substring(8));
     }
@@ -801,9 +993,22 @@ void handleTextMessage(const String& chat_id, const String& from_name, const Str
         handleUnsubscribe(chat_id, from_name);
     }
     else if (textLower == "/tes_alarm" || textLower == "🧪 tes alarm") {
-        bot.sendMessage(chat_id, "🧪 Memulai tes buzzer alarm...", "");
-        playAlarmTone();
-        bot.sendMessage(chat_id, "✅ Tes alarm selesai. Modul buzzer normal.", "");
+        if (isDeviceOwner(chat_id)) {
+            bot.sendMessage(chat_id, "🧪 Memulai tes buzzer alarm pada boks FEBOX Anda...", "");
+            playAlarmTone();
+            bot.sendMessage(chat_id, "✅ Tes alarm selesai. Modul audio boks FEBOX normal.", "");
+        } else {
+            String msg = "ℹ️ *Layanan Notifikasi Telegram Saja*\n\n";
+            msg += "Akun Anda saat ini terdaftar pada layanan notifikasi Telegram (tanpa menautkan boks fisik FEBOX).\n\n";
+            msg += "• Alarm buzzer fisik boks *hanya berbunyi* untuk pemilik resmi yang telah menautkan ID boks.\n";
+            msg += "• Anda tetap mendapatkan pesan notifikasi pengingat via Telegram tepat waktu sesuai jadwal!\n\n";
+            if (deviceOwnerChatId.length() == 0) {
+                msg += "💡 _Boks fisik saat ini tersedia! Anda dapat menautkannya dengan mengetik:_ `/tautkan " + deviceId + "`";
+            } else {
+                msg += "💡 _Boks fisik saat ini sedang ditautkan oleh user lain._";
+            }
+            bot.sendMessage(chat_id, msg, "Markdown");
+        }
     }
     else if (textLower == "/help" || textLower == "/bantuan" || textLower == "❓ bantuan") {
         sendHelp(chat_id);
@@ -813,6 +1018,7 @@ void handleTextMessage(const String& chat_id, const String& from_name, const Str
         help += "Silakan gunakan tombol menu di bawah atau ketik:\n";
         help += "• /start - Buka menu utama\n";
         help += "• /jadwal - Pengaturan hari & jam pengingat\n";
+        help += "• /tautkan - Tautkan boks fisik FEBOX\n";
         help += "• /status - Cek status pengingat Anda\n";
         help += "• /bantuan - Panduan lengkap & tips Fe";
         bot.sendMessageWithReplyKeyboard(chat_id, help, "Markdown", MAIN_KEYBOARD, true);
@@ -851,14 +1057,69 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 void checkResetButton() {
     pinMode(RESET_PIN, INPUT_PULLUP);
     if (digitalRead(RESET_PIN) == LOW) {
-        delay(2000);
-        if (digitalRead(RESET_PIN) == LOW) {
-            Serial.println("\n[Action] Reset ditekan! Menghapus data WiFi...");
-            beep(3, 60, 60, 3200);
-            WiFiManager wm;
-            wm.resetSettings();
-            delay(1000);
-            ESP.restart();
+        unsigned long startPress = millis();
+        Serial.println("\n[Button] Tombol fisik boks mulai ditekan...");
+
+        int lastBeepSec = 0;
+        bool resetCompleted = false;
+
+        while (digitalRead(RESET_PIN) == LOW) {
+            unsigned long duration = millis() - startPress;
+            int seconds = duration / 1000;
+
+            // Indikator audio beep pendek setiap 5 detik (5s, 10s, 15s)
+            if (seconds >= 5 && seconds < 20 && seconds != lastBeepSec && seconds % 5 == 0) {
+                lastBeepSec = seconds;
+                Serial.printf("[Button] Tombol ditahan: %d detik...\n", seconds);
+                beep(1, 40, 0, 2000);
+            }
+
+            // Jika tombol ditahan selama 20 detik!
+            if (seconds >= 20 && !resetCompleted) {
+                resetCompleted = true;
+                Serial.println("\n[Action] 20 detik tercapai! Melakukan Reset User Perangkat...");
+
+                // Nada konfirmasi selesai (3x beep ceria)
+                beep(3, 100, 80, 3000);
+
+                // Kirim notifikasi Telegram ke user pemilik sebelumnya jika ada
+                if (deviceOwnerChatId.length() > 0) {
+                    if (WiFi.status() == WL_CONNECTED) {
+                        String notify = "⚠️ *PEMBERITAHUAN RESET PERANGKAT FEBOX* ⚠️\n\n";
+                        notify += "Halo *" + deviceOwnerName + "*!\n";
+                        notify += "Tombol reset fisik pada boks FEBOX (*" + deviceId + "*) telah ditekan selama *20 detik*.\n\n";
+                        notify += "🔓 Boks Anda saat ini *SUDAH TIDAK LAGI TERHUBUNG* dengan akun Anda.\n";
+                        notify += "Alarm buzzer fisik pada boks tidak akan berbunyi sampai perangkat didaftarkan kembali.\n\n";
+                        notify += "📱 *Layanan Telegram:* Anda tetap menerima notifikasi pengingat via bot ini.\n\n";
+                        notify += "📦 *Daftarkan Kembali:* Jika ini Anda dan ingin menautkan kembali, ketik:\n";
+                        notify += "`/tautkan " + deviceId + "`";
+
+                        bot.sendMessage(deviceOwnerChatId, notify, "Markdown");
+                        Serial.printf("[Action] Notifikasi reset berhasil dikirim ke Chat ID: %s\n", deviceOwnerChatId.c_str());
+                        delay(600); // Berikan jeda agar transmisi paket Telegram tuntas
+                    }
+                }
+
+                // Hapus data kepemilikan di flash memory
+                deviceOwnerChatId = "";
+                deviceOwnerName = "";
+                saveDeviceOwner();
+
+                Serial.println("[Sukses] Kepemilikan boks berhasil di-reset. Boks kini berstatus bebas.");
+                break;
+            }
+
+            delay(50);
+        }
+
+        // Tunggu hingga tombol benar-benar dilepas
+        while (digitalRead(RESET_PIN) == LOW) {
+            delay(50);
+        }
+
+        if (!resetCompleted) {
+            unsigned long duration = millis() - startPress;
+            Serial.printf("[Button] Tombol dilepas setelah %lu ms (reset 20 detik dibatalkan).\n", duration);
         }
     }
 }
@@ -904,7 +1165,10 @@ void setup() {
     Serial.println("\n--- Memulai Fe-Reminder ESP32-C3 ---");
     beep(1, 100, 0, 2700);
 
-    // Baca daftar subscriber dari flash memory
+    // Inisialisasi ID Perangkat unik
+    initDeviceId();
+
+    // Baca daftar subscriber & pemilik boks dari flash memory
     loadSubscribers();
 
     // Inisialisasi I2C & RTC
@@ -1001,13 +1265,19 @@ void loop() {
                         sub.lastTriggeredDay = currentDay;
                         sub.lastTriggeredMin = currentMinute;
 
-                        Serial.printf("\n>>> [ALARM AKTIF] Mengirim pengingat Fe ke %s (%s) <<<\n",
-                                      sub.name.c_str(), sub.chatId.c_str());
+                        bool isOwner = isDeviceOwner(sub.chatId);
+
+                        Serial.printf("\n>>> [PENGINGAT] Mengirim pengingat Fe ke %s (%s) [%s] <<<\n",
+                                      sub.name.c_str(), sub.chatId.c_str(),
+                                      isOwner ? "PEMILIK BOKS" : "PENGGUNA TELEGRAM");
 
                         if (WiFi.status() == WL_CONNECTED) {
                             String msg = "💊 *PENGINGAT MINUM TABLET TAMBAH DARAH (Fe)* 💊\n\n";
                             msg += "Halo *" + sub.name + "*! Waktunya minum Tablet Tambah Darah sekarang (" + 
                                    formatTime(sub.hour, sub.minute) + ").\n\n";
+                            if (isOwner) {
+                                msg += "🔊 _Alarm boks fisik FEBOX Anda sedang berbunyi._\n\n";
+                            }
                             msg += "💡 *Tips Penting:*\n";
                             msg += "• Minum dengan air putih atau jus jeruk (Vitamin C meningkatkan penyerapan zat besi).\n";
                             msg += "• *Hindari* teh, kopi, atau susu saat meminumnya karena menghambat penyerapan.\n\n";
@@ -1016,7 +1286,10 @@ void loop() {
                             bot.sendMessage(sub.chatId, msg, "Markdown");
                         }
 
-                        buzzerTriggeredThisCycle = true;
+                        // Hanya aktifkan buzzer fisik jika pengguna ini adalah pemilik sah boks!
+                        if (isOwner) {
+                            buzzerTriggeredThisCycle = true;
+                        }
                     }
                 }
             }
