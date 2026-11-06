@@ -1130,12 +1130,24 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 }
 
 void handlePhysicalButton() {
-    pinMode(RESET_PIN, INPUT_PULLUP);
-
+    static bool isButtonPressed = false;
+    static unsigned long buttonPressStart = 0;
+    static int lastBeepSec = 0;
+    static bool resetActionFired = false;
     static int clickCount = 0;
     static unsigned long lastReleaseTime = 0;
+    static bool buttonFaultReported = false;
 
-    if (digitalRead(RESET_PIN) == LOW) {
+    unsigned long currentMillis = millis();
+    bool rawState = digitalRead(RESET_PIN); // LOW = ditekan (INPUT_PULLUP), HIGH = dilepas
+
+    // 1. Deteksi penekanan tombol baru (Falling Edge)
+    if (rawState == LOW && !isButtonPressed) {
+        isButtonPressed = true;
+        buttonPressStart = currentMillis;
+        lastBeepSec = 0;
+        resetActionFired = false;
+
         // A. JIKA ALARM SEDANG BERBUNYI: 1x klik langsung matikan alarm seketika!
         if (isAlarmRinging) {
             stopAlarm();
@@ -1145,35 +1157,29 @@ void handlePhysicalButton() {
             if (deviceOwnerChatId.length() > 0 && WiFi.status() == WL_CONNECTED) {
                 bot.sendMessage(deviceOwnerChatId, "🔔 *Alarm boks telah dimatikan via tombol fisik.* Jangan lupa minum air putih! 👍", "Markdown");
             }
-
-            while (digitalRead(RESET_PIN) == LOW) {
-                delay(30);
-            }
+            resetActionFired = true; // Tandai agar penahanan lanjutan tidak memicu unpair
             clickCount = 0;
             return;
         }
 
-        // B. JIKA ALARM TIDAK BERBUNYI:
-        unsigned long startPress = millis();
         Serial.println("\n[Button] Tombol fisik boks mulai ditekan...");
-
-        int lastBeepSec = 0;
-        bool resetCompleted = false;
-
-        while (digitalRead(RESET_PIN) == LOW) {
-            unsigned long duration = millis() - startPress;
+    }
+    // 2. Tombol sedang terus ditahan (Non-blocking holding tracker)
+    else if (rawState == LOW && isButtonPressed) {
+        if (!resetActionFired) {
+            unsigned long duration = currentMillis - buttonPressStart;
             int seconds = duration / 1000;
 
             // Indikator audio beep pendek setiap 5 detik (5s, 10s, 15s)
-            if (seconds >= 5 && seconds < 20 && seconds != lastBeepSec && seconds % 5 == 0) {
+            if (seconds >= 5 && seconds < 20 && seconds != lastBeepSec && (seconds % 5 == 0)) {
                 lastBeepSec = seconds;
                 Serial.printf("[Button] Tombol ditahan: %d detik...\n", seconds);
                 beep(1, 40, 0, 2000);
             }
 
             // Jika tombol ditahan selama 20 detik!
-            if (seconds >= 20 && !resetCompleted) {
-                resetCompleted = true;
+            if (seconds >= 20) {
+                resetActionFired = true;
                 Serial.println("\n[Action] 20 detik tercapai! Melakukan Reset User Perangkat...");
 
                 // Nada konfirmasi selesai (3x beep ceria)
@@ -1182,7 +1188,9 @@ void handlePhysicalButton() {
                 // Kirim notifikasi Telegram ke user pemilik sebelumnya jika ada
                 if (deviceOwnerChatId.length() > 0) {
                     if (WiFi.status() == WL_CONNECTED) {
-                        String notify = "⚠️ *PEMBERITAHUAN RESET PERANGKAT FEBOX* ⚠️\n\n";
+                        String notify;
+                        notify.reserve(512);
+                        notify = "⚠️ *PEMBERITAHUAN RESET PERANGKAT FEBOX* ⚠️\n\n";
                         notify += "Halo *" + deviceOwnerName + "*!\n";
                         notify += "Tombol reset fisik pada boks FEBOX (*" + deviceId + "*) telah ditekan selama *20 detik*.\n\n";
                         notify += "🔓 Boks Anda saat ini *SUDAH TIDAK LAGI TERHUBUNG* dengan akun Anda.\n";
@@ -1193,7 +1201,6 @@ void handlePhysicalButton() {
 
                         bot.sendMessage(deviceOwnerChatId, notify, "Markdown");
                         Serial.printf("[Action] Notifikasi reset berhasil dikirim ke Chat ID: %s\n", deviceOwnerChatId.c_str());
-                        delay(600); // Berikan jeda agar transmisi paket Telegram tuntas
                     }
                 }
 
@@ -1203,32 +1210,38 @@ void handlePhysicalButton() {
                 saveDeviceOwner();
 
                 Serial.println("[Sukses] Kepemilikan boks berhasil di-reset. Boks kini berstatus bebas.");
-                break;
             }
-
-            delay(50);
-        }
-
-        // Tunggu hingga tombol benar-benar dilepas
-        while (digitalRead(RESET_PIN) == LOW) {
-            delay(50);
-        }
-
-        if (!resetCompleted) {
-            unsigned long duration = millis() - startPress;
-            if (duration < 1500) {
-                clickCount++;
-                lastReleaseTime = millis();
-                beep(1, 20, 0, 2600);
-                Serial.printf("[Button] Klik ke-%d terdeteksi.\n", clickCount);
-            } else {
-                Serial.printf("[Button] Tombol dilepas setelah %lu ms (reset dibatalkan).\n", duration);
+        } else {
+            // Proteksi jika tombol macet / short-circuit ke GND lebih dari 35 detik
+            unsigned long duration = currentMillis - buttonPressStart;
+            if (duration > 35000 && !buttonFaultReported) {
+                buttonFaultReported = true;
+                Serial.println("[Warning] Tombol Pin 2 terdeteksi tertahan > 35 detik. Kemungkinan macet/short ke GND. Sistem tetap berjalan normal tanpa deadlock.");
             }
         }
     }
+    // 3. Tombol dilepas (Rising Edge)
+    else if (rawState == HIGH && isButtonPressed) {
+        unsigned long pressDuration = currentMillis - buttonPressStart;
+        isButtonPressed = false;
+        buttonFaultReported = false;
 
-    // 2. Deteksi triple click setelah timeout 450 ms
-    if (clickCount > 0 && (millis() - lastReleaseTime > 450)) {
+        if (!resetActionFired) {
+            // Filter debouncing: hanya terima penekanan antara 40ms hingga 1500ms
+            if (pressDuration >= 40 && pressDuration < 1500) {
+                clickCount++;
+                lastReleaseTime = currentMillis;
+                beep(1, 20, 0, 2600);
+                Serial.printf("[Button] Klik ke-%d terdeteksi (durasi: %lu ms).\n", clickCount, pressDuration);
+            } else {
+                Serial.printf("[Button] Tombol dilepas setelah %lu ms (dilepas sebelum 20s, aksi reset dibatalkan).\n", pressDuration);
+            }
+        }
+        resetActionFired = false;
+    }
+
+    // 4. Deteksi Triple Click setelah timeout jendela klik 450 ms
+    if (!isButtonPressed && clickCount > 0 && (currentMillis - lastReleaseTime > 450)) {
         if (clickCount == 3) {
             Serial.println("\n[Action] TRIPLE CLICK terdeteksi! Mereset pengaturan WiFi AP...");
             beep(3, 80, 50, 3200);
@@ -1279,6 +1292,7 @@ void setup() {
     initBuzzer();
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
+    pinMode(RESET_PIN, INPUT_PULLUP);
 
     esp_bt_controller_disable();
 
@@ -1304,8 +1318,6 @@ void setup() {
             rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
         }
     }
-
-    handlePhysicalButton();
 
     WiFi.mode(WIFI_AP_STA);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
