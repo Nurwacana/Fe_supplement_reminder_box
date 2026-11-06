@@ -165,9 +165,10 @@ String getDaysInlineKeyboard() {
 
 // ==================== KONTROL AUDIO (BUZZER) & ALARM ====================
 
-bool isAlarmRinging = false;
+volatile bool isAlarmRinging = false;
 unsigned long alarmStartTime = 0;
 const unsigned long ALARM_MAX_DURATION = 120000; // Maksimal berbunyi 2 menit jika tidak dimatikan
+TaskHandle_t alarmBuzzerTaskHandle = NULL;
 
 void initBuzzer() {
     ledcSetup(PWM_CHANNEL, 2700, PWM_RES);
@@ -260,47 +261,63 @@ uint32_t getRingtoneDuration(const RingtoneStep* ringtone, size_t steps) {
     return total;
 }
 
-// Loop update non-blocking untuk memainkan melodi nada dering pengingat & kedipan LED
-void updateAlarmBuzzer() {
-    if (!isAlarmRinging) return;
+// Dedicated FreeRTOS Task untuk memainkan melodi alarm buzzer presisi tinggi
+// Berjalan di prioritas lebih tinggi (Priority 2) dari loopTask (Priority 1)
+// sehingga kebal dari blocking I/O jaringan/TLS Telegram
+void alarmBuzzerTask(void *pvParameters) {
+    while (true) {
+        // Jika alarm tidak sedang berdering, tidur sejenak agar hemat CPU
+        if (!isAlarmRinging) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
 
-    unsigned long elapsed = millis() - alarmStartTime;
-    if (elapsed > ALARM_MAX_DURATION) {
-        stopAlarm();
-        Serial.println("[Alarm] Batas waktu maksimal 2 menit tercapai. Alarm berhenti otomatis.");
-        return;
-    }
+        // Cek batas durasi maksimal alarm (2 menit)
+        if (millis() - alarmStartTime > ALARM_MAX_DURATION) {
+            stopAlarm();
+            Serial.println("[Alarm] Batas waktu maksimal 2 menit tercapai. Alarm berhenti otomatis.");
+            continue;
+        }
 
-    size_t steps = 0;
-    const RingtoneStep* ringtone = getActiveRingtonePtr(steps);
-    uint32_t totalDuration = getRingtoneDuration(ringtone, steps);
-    if (totalDuration == 0) return;
+        size_t steps = 0;
+        const RingtoneStep* ringtone = getActiveRingtonePtr(steps);
 
-    uint32_t pos = elapsed % totalDuration;
-    uint32_t accum = 0;
+        // Mainkan satu siklus melodi langkah demi langkah secara presisi
+        for (size_t i = 0; i < steps && isAlarmRinging; i++) {
+            if (millis() - alarmStartTime > ALARM_MAX_DURATION) {
+                stopAlarm();
+                break;
+            }
 
-    for (size_t i = 0; i < steps; i++) {
-        uint32_t playEnd = accum + ringtone[i].play_ms;
-        uint32_t stepEnd = playEnd + ringtone[i].pause_ms;
-
-        if (pos < playEnd) {
+            // 1. Bunyikan nada
             if (ringtone[i].freq > 0) {
                 buzzerTone(ringtone[i].freq);
+                digitalWrite(LED_PIN, LOW); // LED menyala saat nada berbunyi
             } else {
                 buzzerNoTone();
+                digitalWrite(LED_PIN, HIGH);
             }
-            digitalWrite(LED_PIN, LOW); // LED menyala saat nada berbunyi
-            return;
-        } else if (pos < stepEnd) {
+
+            // Tunggu durasi play_ms dengan presisi tinggi FreeRTOS (responsif jika alarm dimatikan seketika)
+            unsigned long startPlay = millis();
+            while (isAlarmRinging && (millis() - startPlay < ringtone[i].play_ms)) {
+                unsigned long rem = ringtone[i].play_ms - (millis() - startPlay);
+                vTaskDelay(pdMS_TO_TICKS(rem > 10 ? 10 : rem));
+            }
+
+            // 2. Heningkan jeda antar nada
             buzzerNoTone();
             digitalWrite(LED_PIN, HIGH); // LED padam saat jeda antar nada
-            return;
-        }
-        accum = stepEnd;
-    }
 
-    buzzerNoTone();
-    digitalWrite(LED_PIN, HIGH);
+            if (ringtone[i].pause_ms > 0 && isAlarmRinging) {
+                unsigned long startPause = millis();
+                while (isAlarmRinging && (millis() - startPause < ringtone[i].pause_ms)) {
+                    unsigned long rem = ringtone[i].pause_ms - (millis() - startPause);
+                    vTaskDelay(pdMS_TO_TICKS(rem > 10 ? 10 : rem));
+                }
+            }
+        }
+    }
 }
 
 // Pemutaran melodi sinkron untuk uji coba (/tes_alarm dan pratinjau nada)
@@ -1544,6 +1561,10 @@ void setup() {
     digitalWrite(LED_PIN, LOW);
     pinMode(RESET_PIN, INPUT_PULLUP);
 
+    // Jalankan dedicated FreeRTOS task untuk melodi alarm buzzer presisi tinggi
+    // Priority 2 membuat timing melodi kebal dari latency/blocking HTTPS Telegram
+    xTaskCreate(alarmBuzzerTask, "alarmBuzzerTask", 2560, NULL, 2, &alarmBuzzerTaskHandle);
+
     esp_bt_controller_disable();
 
     Serial.println("\n--- Memulai Fe-Reminder ESP32-C3 ---");
@@ -1613,7 +1634,7 @@ void setup() {
 
 void loop() {
     handlePhysicalButton();
-    updateAlarmBuzzer();
+    // Melodi alarm buzzer berputar di FreeRTOS task independen (alarmBuzzerTask) dengan presisi mikrodetik
 
     // 0. Wi-Fi Watchdog & Auto-Reconnect non-blocking
     static unsigned long lastWifiCheck = 0;
