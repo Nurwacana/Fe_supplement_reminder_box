@@ -1313,6 +1313,7 @@ void setup() {
     // Inisialisasi I2C & RTC
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(100000);
+    Wire.setTimeOut(1000); // Batas timeout I2C 1000 ms untuk mencegah deadlock jika jalur bus terlepas/noisy
 
     if (!rtc.begin(&Wire)) {
         Serial.println("[Error] Modul RTC tidak terdeteksi pada pin 8 & 9!");
@@ -1423,6 +1424,19 @@ void loop() {
     if (millis() - lastClockPrint >= 1000) {
         lastClockPrint = millis();
         DateTime now = rtc.now();
+
+        // Validasi integritas pembacaan RTC (jika bus drop atau data korup)
+        if (now.year() < 2024 || now.year() > 2099) {
+            static unsigned long lastRtcWarn = 0;
+            if (millis() - lastRtcWarn >= 15000) {
+                lastRtcWarn = millis();
+                Serial.printf("[RTC Warn] Pembacaan waktu tidak valid (%04d-%02d-%02d)! Memulihkan bus I2C...\n",
+                              now.year(), now.month(), now.day());
+                Wire.begin(I2C_SDA, I2C_SCL);
+                Wire.setClock(100000);
+            }
+            return; // Lewati siklus evaluasi pengingat agar tidak memicu alarm palsu
+        }
 
         Serial.printf("[%s] %04d-%02d-%02d %02d:%02d:%02d\n",
                       daysOfTheWeek[now.dayOfTheWeek()],
