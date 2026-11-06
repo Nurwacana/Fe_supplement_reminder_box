@@ -689,20 +689,18 @@ void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
 
 void sendRingtoneMenu(const String& chat_id) {
     String msg;
-    msg.reserve(512);
-    msg = "🎵 *PILIHAN NADA DERING ALARM FEBOX* 🔔\n\n";
+    msg.reserve(256);
+    msg = "🎵 *PILIHAN NADA ALARM BOKS FEBOX* 🔔\n\n";
     msg += "Nada aktif saat ini:\n";
     msg += "▶️ *" + getRingtoneName(activeRingtoneChoice) + "*\n\n";
-    msg += "💡 *Panduan Resonansi Buzzer:*\n";
-    msg += "• *Resonansi Nyaring ⭐:* Frekuensi dinaikkan 1 oktaf (+1) agar beresonansi maksimal dan paling nyaring pada modul buzzer piezo boks.\n";
-    msg += "• *Frekuensi Asli:* Menggunakan tangga nada original standar.\n\n";
-    msg += "Silakan pilih nada dering alarm yang diinginkan:";
+    msg += "💡 _Nada Resonansi (+1 oktaf) bersuara paling nyaring di buzzer piezo boks._\n\n";
+    msg += "Silakan pilih nada dering alarm di bawah:";
 
     String kb = "["
-        "[{\"text\":\"📱 Samsung (Resonansi Nyaring ⭐)\",\"callback_data\":\"rt_0\"}],"
-        "[{\"text\":\"📱 Samsung (Frekuensi Asli)\",\"callback_data\":\"rt_1\"}],"
-        "[{\"text\":\"☎️ Nokia (Resonansi Nyaring ⭐)\",\"callback_data\":\"rt_2\"}],"
-        "[{\"text\":\"☎️ Nokia (Frekuensi Asli)\",\"callback_data\":\"rt_3\"}],"
+        "[{\"text\":\"📱 Samsung (Resonansi ⭐)\",\"callback_data\":\"rt_0\"}],"
+        "[{\"text\":\"📱 Samsung (Original)\",\"callback_data\":\"rt_1\"}],"
+        "[{\"text\":\"☎️ Nokia (Resonansi ⭐)\",\"callback_data\":\"rt_2\"}],"
+        "[{\"text\":\"☎️ Nokia (Original)\",\"callback_data\":\"rt_3\"}],"
         "[{\"text\":\"🧪 Tes Bunyi Nada Aktif\",\"callback_data\":\"test_ringtone\"}]"
     "]";
 
@@ -1165,19 +1163,35 @@ void handleCallbackQuery(const String& chat_id, const String& from_name, const S
         return;
     }
     else if (data == "test_ringtone") {
-        if (isDeviceOwner(chat_id)) {
-            bot.sendMessage(chat_id, "🧪 Memutar nada dering aktif pada boks fisik...", "");
-            playAlarmTone();
-            bot.sendMessage(chat_id, "✅ Tes nada dering selesai.", "");
-        } else {
-            bot.sendMessage(chat_id, "ℹ️ Tes suara hanya dapat dilakukan oleh pemilik boks fisik yang tertaut.", "");
+        if (!isDeviceOwner(chat_id)) {
+            if (deviceOwnerChatId.length() == 0) {
+                deviceOwnerChatId = chat_id;
+                deviceOwnerName = from_name;
+                saveDeviceOwner();
+                getOrCreateSubscriber(chat_id, from_name);
+                Serial.printf("[Device] Boks otomatis ditautkan ke pemilik: %s (%s)\n", from_name.c_str(), chat_id.c_str());
+            } else {
+                bot.sendMessage(chat_id, "ℹ️ Tes suara hanya dapat dilakukan oleh pemilik boks fisik yang tertaut (" + deviceOwnerName + ").", "");
+                return;
+            }
         }
+        bot.sendMessage(chat_id, "🧪 Memutar nada dering aktif pada boks fisik...", "");
+        playAlarmTone();
+        bot.sendMessage(chat_id, "✅ Tes nada dering selesai.", "");
         return;
     }
     else if (data.startsWith("rt_")) {
         if (!isDeviceOwner(chat_id)) {
-            bot.sendMessage(chat_id, "ℹ️ Pengaturan nada dering boks fisik hanya dapat diubah oleh pemilik boks yang tertaut.", "");
-            return;
+            if (deviceOwnerChatId.length() == 0) {
+                deviceOwnerChatId = chat_id;
+                deviceOwnerName = from_name;
+                saveDeviceOwner();
+                getOrCreateSubscriber(chat_id, from_name);
+                Serial.printf("[Device] Boks otomatis ditautkan ke pemilik: %s (%s)\n", from_name.c_str(), chat_id.c_str());
+            } else {
+                bot.sendMessage(chat_id, "ℹ️ Pengaturan nada dering boks fisik hanya dapat diubah oleh pemilik boks yang tertaut (" + deviceOwnerName + ").", "");
+                return;
+            }
         }
         int choice = data.substring(3).toInt();
         if (choice >= 0 && choice <= 3) {
@@ -1291,6 +1305,14 @@ void handleTextMessage(const String& chat_id, const String& from_name, const Str
         sendRingtoneMenu(chat_id);
     }
     else if (textLower == "/tes_alarm" || textLower == "🧪 tes alarm") {
+        if (!isDeviceOwner(chat_id) && deviceOwnerChatId.length() == 0) {
+            deviceOwnerChatId = chat_id;
+            deviceOwnerName = from_name;
+            saveDeviceOwner();
+            getOrCreateSubscriber(chat_id, from_name);
+            Serial.printf("[Device] Boks otomatis ditautkan ke pemilik: %s (%s)\n", from_name.c_str(), chat_id.c_str());
+        }
+
         if (isDeviceOwner(chat_id)) {
             bot.sendMessage(chat_id, "🧪 Memulai tes buzzer alarm pada boks FEBOX Anda...", "");
             playAlarmTone();
@@ -1579,6 +1601,11 @@ void setup() {
 
         // Lewati validasi sertifikat SSL agar hemat RAM dan koneksi cepat
         secured_client.setInsecure();
+
+        // Tingkatkan buffer pesan & timeout UniversalTelegramBot
+        // Default 1500 byte menyebabkan gagal parse (NoMemory) pada callback query dengan inline keyboard besar
+        bot.maxMessageLength = 8192;
+        bot.waitForResponse = 2500;
     }
 }
 
