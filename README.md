@@ -23,7 +23,7 @@ Proyek ini bersifat **inklusif**: pengguna yang memiliki perangkat boks fisik da
   - **3x Klik Cepat**: Mereset pengaturan Wi-Fi (membuka kembali portal konfigurasi Wi-Fi).
   - **Tahan 20 Detik**: Mereset kepemilikan perangkat (unpair) dan secara otomatis mengirim notifikasi peringatan ke Telegram pemilik lama.
   - **Proteksi Anti-Freeze**: Menggunakan *finite state machine non-blocking* sehingga jika tombol tertekan lama atau short ke GND, sistem tetap beroperasi normal tanpa deadlock.
-- **Auto-Reconnect Wi-Fi & NTP Berkala**: Watchdog mandiri yang otomatis menghubungkan kembali Wi-Fi saat terputus dan menyinkronkan ulang waktu RTC DS3231 ke NTP Server setiap 24 jam.
+- **Auto-Reconnect Wi-Fi & NTP Berkala (1 Jam)**: Watchdog mandiri yang otomatis menghubungkan kembali Wi-Fi saat terputus, menyinkronkan waktu langsung di awal booting saat baru terhubung Wi-Fi, serta melakukan resync otomatis ke NTP Server setiap 1 jam untuk menjaga presisi tinggi RTC DS3231.
 - **Proteksi Hardware Bus I2C**: Dilengkapi timeout 1000 ms pada jalur I2C untuk mencegah CPU hang jika koneksi modul RTC terlepas atau berderau (noisy).
 - **Penyimpanan Permanen & Kuota Aman (Maks 20 User)**: Jadwal dan kepemilikan tersimpan di NVS Flash dengan batas kuota aman 20 pengguna untuk menjamin kestabilan memori jangka panjang tanpa risiko fragmentasi Heap atau crash OOM.
 - **Efisiensi Daya & Termal Dingin**: Dilengkapi 802.11 Wi-Fi modem sleep, throttling FreeRTOS CPU idle delay (15 ms), dan interval TLS polling teroptimasi (2500 ms) sehingga beban prosesor turun drastis (~2% CPU idle), temperatur chip ESP32-C3 dingin (~40°C), dan bebas lag buffer USB-CDC.

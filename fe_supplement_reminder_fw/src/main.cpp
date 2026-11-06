@@ -1480,36 +1480,36 @@ void handlePhysicalButton() {
     }
 }
 
+// Status sinkronisasi NTP & jadwal berkala 1 jam
+bool ntpSynchronized = false;
+unsigned long lastNtpPeriodicSync = 0;
+const unsigned long NTP_SYNC_INTERVAL = 3600000UL; // 1 Jam (3600 detik = 3.600.000 ms)
+
 bool syncNTPtoRTC() {
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
     struct tm timeinfo;
-    Serial.print("[NTP] Menghubungi NTP server...");
+    Serial.println("[NTP] Menghubungi NTP server (pool.ntp.org)...");
     
-    int retry = 0;
-    while (!getLocalTime(&timeinfo) && retry < 8) {
-        Serial.print(".");
-        delay(300);
-        retry++;
-    }
-
-    if (retry < 8) {
-        Serial.println("\n[NTP] Waktu NTP berhasil didapatkan.");
+    // Tunggu respons NTP hingga 5 detik (non-blocking wait)
+    if (getLocalTime(&timeinfo, 5000)) {
+        Serial.println("[NTP] Waktu NTP berhasil didapatkan.");
         rtc.adjust(DateTime(timeinfo.tm_year + 1900, 
                             timeinfo.tm_mon + 1, 
                             timeinfo.tm_mday, 
                             timeinfo.tm_hour, 
                             timeinfo.tm_min, 
                             timeinfo.tm_sec));
-        Serial.println("[RTC] Waktu RTC berhasil disinkronkan!");
+        Serial.printf("[RTC] Waktu RTC berhasil disinkronkan: %04d-%02d-%02d %02d:%02d:%02d WIB\n",
+                      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+                      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+        ntpSynchronized = true;
+        lastNtpPeriodicSync = millis();
         return true;
     } else {
-        Serial.println("\n[NTP] Gagal mengambil waktu NTP (akan dicoba kembali secara berkala).");
+        Serial.println("[NTP] Gagal mengambil waktu NTP (akan dicoba kembali secara otomatis).");
         return false;
     }
 }
-
-// Status sinkronisasi NTP
-bool ntpSynchronized = false;
 
 // ==================== SETUP ====================
 
@@ -1573,7 +1573,9 @@ void setup() {
         playWifiConnectedTone();
         digitalWrite(LED_PIN, HIGH);
 
-        ntpSynchronized = syncNTPtoRTC();
+        // Sinkronisasi awal waktu NTP ke RTC saat baru terhubung Wi-Fi
+        Serial.println("[NTP] Sinkronisasi awal saat baru terhubung Wi-Fi...");
+        syncNTPtoRTC();
 
         // Lewati validasi sertifikat SSL agar hemat RAM dan koneksi cepat
         secured_client.setInsecure();
@@ -1590,7 +1592,6 @@ void loop() {
     static unsigned long lastWifiCheck = 0;
     static unsigned long wifiDisconnectedStart = 0;
     static unsigned long lastNtpRetry = 0;
-    static unsigned long lastNtpDailySync = 0;
 
     if (millis() - lastWifiCheck >= 3000) {
         lastWifiCheck = millis();
@@ -1610,25 +1611,29 @@ void loop() {
                 wifiDisconnectedStart = 0;
                 digitalWrite(LED_PIN, HIGH);
                 playWifiConnectedTone(); // Melodi ceria saat koneksi pulih
-                if (!ntpSynchronized) {
-                    ntpSynchronized = syncNTPtoRTC();
+                // Jika koneksi pulih dan belum sinkron atau sudah waktunya, sinkronkan
+                if (!ntpSynchronized || (millis() - lastNtpPeriodicSync >= NTP_SYNC_INTERVAL)) {
+                    Serial.println("[NTP] Wi-Fi pulih, melakukan sinkronisasi NTP...");
+                    syncNTPtoRTC();
                 }
             }
         }
     }
 
     // Sinkronisasi ulang NTP:
-    // A. Retry setiap 60 detik jika saat boot awal gagal
-    // B. Re-sync otomatis setiap 24 jam untuk menjaga akurasi RTC DS3231
+    // A. Retry setiap 20 detik jika sinkronisasi awal saat boot belum berhasil
+    // B. Re-sync otomatis setiap 1 jam (3.600.000 ms) untuk menjaga presisi RTC DS3231
     if (WiFi.status() == WL_CONNECTED) {
-        if (!ntpSynchronized && (millis() - lastNtpRetry >= 60000)) {
+        if (!ntpSynchronized && (millis() - lastNtpRetry >= 20000)) {
             lastNtpRetry = millis();
-            Serial.println("[NTP] Mencoba ulang sinkronisasi NTP...");
-            ntpSynchronized = syncNTPtoRTC();
-        } else if (ntpSynchronized && (millis() - lastNtpDailySync >= 86400000UL)) {
-            lastNtpDailySync = millis();
-            Serial.println("[NTP] Sinkronisasi berkala 24 jam ke RTC DS3231...");
+            Serial.println("[NTP] Mencoba ulang sinkronisasi NTP (awal boot belum tersinkron)...");
             syncNTPtoRTC();
+        } else if (ntpSynchronized && (millis() - lastNtpPeriodicSync >= NTP_SYNC_INTERVAL)) {
+            Serial.println("[NTP] Sinkronisasi berkala 1 jam ke RTC DS3231...");
+            if (!syncNTPtoRTC()) {
+                // Jika gagal saat re-sync 1 jam, coba lagi dalam 1 menit
+                lastNtpPeriodicSync = millis() - (NTP_SYNC_INTERVAL - 60000);
+            }
         }
     }
 
