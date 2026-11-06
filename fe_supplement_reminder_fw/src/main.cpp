@@ -1638,15 +1638,32 @@ void loop() {
     }
 
     static unsigned long lastBotCheck = 0;
+    static unsigned long lastUserActivityTime = 0;
     static unsigned long lastClockPrint = 0;
 
-    // 1. Cek Pesan Masuk Telegram setiap 2.5 detik (menghemat CPU mbedTLS crypto & mencegah chip panas)
-    if (WiFi.status() == WL_CONNECTED && millis() - lastBotCheck >= 2500) {
+    // 1. Cek Pesan Masuk Telegram dengan Adaptive Polling (Polling Cerdas)
+    // - Mode Alarm: 800 ms (mematikan buzzer via Telegram responsif seketika)
+    // - Mode Interaksi Aktif: 1000 ms (responsif saat user menekan tombol/menu dalam 30 detik terakhir)
+    // - Mode Siaga (Idle): 1500 ms (hemat daya & beban server saat standby)
+    unsigned long botPollingInterval = 1500;
+    if (isAlarmRinging) {
+        botPollingInterval = 800;
+    } else if (millis() - lastUserActivityTime < 30000) {
+        botPollingInterval = 1000;
+    }
+
+    if (WiFi.status() == WL_CONNECTED && millis() - lastBotCheck >= botPollingInterval) {
         lastBotCheck = millis();
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+        if (numNewMessages > 0) {
+            lastUserActivityTime = millis();
+        }
         while (numNewMessages) {
             handleNewMessages(numNewMessages);
             numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+            if (numNewMessages > 0) {
+                lastUserActivityTime = millis();
+            }
         }
     }
 
