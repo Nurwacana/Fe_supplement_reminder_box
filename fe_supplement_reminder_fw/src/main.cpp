@@ -244,6 +244,19 @@ void playAlarmTone() {
     }
 }
 
+// Nada melodi khas saat berhasil terhubung ke jaringan Wi-Fi (Chime ceria bertingkat naik)
+void playWifiConnectedTone() {
+    const unsigned int notes[] = { 2093, 2637, 3136, 3951 }; // C7, E7, G7, B7
+    const int durations[]     = { 70,   70,   80,   160 };
+
+    for (int i = 0; i < 4; i++) {
+        buzzerTone(notes[i]);
+        delay(durations[i]);
+        buzzerNoTone();
+        if (i < 3) delay(25);
+    }
+}
+
 // ==================== HELPER FORMAT & PARSING ====================
 
 String formatDays(uint8_t mask) {
@@ -1417,8 +1430,8 @@ void setup() {
         Serial.print("IP Address : ");
         Serial.println(WiFi.localIP());
 
-        beep(1, 80, 40, 2200);
-        beep(1, 150, 0, 3000);
+        // Melodi khas terhubung Wi-Fi
+        playWifiConnectedTone();
         digitalWrite(LED_PIN, HIGH);
 
         ntpSynchronized = syncNTPtoRTC();
@@ -1457,6 +1470,7 @@ void loop() {
                 Serial.printf("[WiFi] Terhubung kembali! IP: %s\n", WiFi.localIP().toString().c_str());
                 wifiDisconnectedStart = 0;
                 digitalWrite(LED_PIN, HIGH);
+                playWifiConnectedTone(); // Melodi ceria saat koneksi pulih
                 if (!ntpSynchronized) {
                     ntpSynchronized = syncNTPtoRTC();
                 }
