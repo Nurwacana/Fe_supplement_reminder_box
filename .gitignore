@@ -1,0 +1,25 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+**/.pio/
+**/.pioenvs/
+**/.piolibdeps/
+
+# Secrets and credentials
+*secrets.h
+**/secrets.h
+!*secrets.h.example
+!**/secrets.h.example
+*.env
+.env*
+!*.env.example
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
