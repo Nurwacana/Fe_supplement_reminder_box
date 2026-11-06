@@ -327,7 +327,20 @@ uint8_t parseDays(String s) {
     return mask;
 }
 
-// ==================== MANAJEMEN PENYIMPANAN NVS ====================
+// ==================== MANAJEMEN PENYIMPANAN NVS & BATAS AMAN ====================
+
+// Batas aman maksimal subscriber untuk menjamin kestabilan memori flash NVS dan RAM
+const size_t MAX_SUBSCRIBERS = 20;
+
+void sendQuotaFullMessage(const String& chat_id) {
+    String msg;
+    msg.reserve(256);
+    msg = "⚠️ *Kapasitas Pengguna Penuh*\n\n";
+    msg += "Kapasitas memori bot boks FEBOX telah mencapai batas aman maksimal (*" + String(MAX_SUBSCRIBERS) + " pengguna*).\n";
+    msg += "Batasan ini diterapkan guna memastikan performa bot dan penyimpanan memori flash IoT tetap stabil tanpa risiko crash.\n\n";
+    msg += "Silakan hubungi pemilik boks jika ingin mendaftarkan akun Anda.";
+    bot.sendMessage(chat_id, msg, "Markdown");
+}
 
 Subscriber* findSubscriber(const String& chatId) {
     for (size_t i = 0; i < subscriberList.size(); i++) {
@@ -338,11 +351,18 @@ Subscriber* findSubscriber(const String& chatId) {
     return nullptr;
 }
 
-Subscriber& getOrCreateSubscriber(const String& chatId, const String& name) {
+Subscriber* getOrCreateSubscriber(const String& chatId, const String& name) {
     Subscriber* existing = findSubscriber(chatId);
     if (existing != nullptr) {
         if (name.length() > 0 && name != "Teman") existing->name = name;
-        return *existing;
+        return existing;
+    }
+
+    if (subscriberList.size() >= MAX_SUBSCRIBERS) {
+        Serial.printf("[Storage] Kuota subscriber maksimal (%d) tercapai! Penambahan user %s ditolak.\n",
+                      MAX_SUBSCRIBERS, chatId.c_str());
+        sendQuotaFullMessage(chatId);
+        return nullptr;
     }
 
     Subscriber newSub;
@@ -355,10 +375,12 @@ Subscriber& getOrCreateSubscriber(const String& chatId, const String& name) {
     newSub.lastTriggeredDay = -1;
     newSub.lastTriggeredMin = -1;
     subscriberList.push_back(newSub);
-    return subscriberList.back();
+    return &subscriberList.back();
 }
 
 void parseSubscriberEntry(const String& entry) {
+    if (subscriberList.size() >= MAX_SUBSCRIBERS) return;
+
     // Format: chatId|hour|minute|daysMask|active|name
     int idx = 0;
     int next = entry.indexOf('|', idx);
@@ -404,14 +426,20 @@ void parseSubscriberEntry(const String& entry) {
 
 void saveSubscribers() {
     String data = "";
+    data.reserve(subscriberList.size() * 50 + 16);
     for (size_t i = 0; i < subscriberList.size(); i++) {
         const auto& s = subscriberList[i];
-        data += s.chatId + "|" + 
-                String(s.hour) + "|" + 
-                String(s.minute) + "|" + 
-                String(s.daysMask) + "|" + 
-                String(s.active ? 1 : 0) + "|" + 
-                s.name;
+        data += s.chatId;
+        data += "|";
+        data += String(s.hour);
+        data += "|";
+        data += String(s.minute);
+        data += "|";
+        data += String(s.daysMask);
+        data += "|";
+        data += (s.active ? "1" : "0");
+        data += "|";
+        data += s.name;
         if (i < subscriberList.size() - 1) data += ";";
     }
     prefs.begin("fe_bot", false);
@@ -424,6 +452,9 @@ void loadSubscribers() {
     deviceOwnerChatId = prefs.getString("owner_chat", "");
     deviceOwnerName = prefs.getString("owner_name", "");
     String data = prefs.getString("v2_subs", "");
+
+    subscriberList.clear();
+    subscriberList.reserve(MAX_SUBSCRIBERS);
 
     if (data.length() == 0) {
         // Cek migrasi dari format v1 (hanya comma-separated chat_id)
@@ -491,7 +522,9 @@ void sendScheduleMenu(const String& chat_id, const String& from_name) {
     uint8_t curD = (s != nullptr) ? s->daysMask : 32;
     bool isAct = (s != nullptr && s->active);
 
-    String msg = "⏰ *PENGATURAN JADWAL PENGINGAT Fe* 🩸\n\n";
+    String msg;
+    msg.reserve(512);
+    msg = "⏰ *PENGATURAN JADWAL PENGINGAT Fe* 🩸\n\n";
     msg += "Jadwal Anda saat ini:\n";
     msg += "📅 Hari: *" + formatDays(curD) + "*\n";
     msg += "⏰ Jam: *" + formatTime(curH, curM) + "*\n";
@@ -512,7 +545,9 @@ void sendScheduleMenu(const String& chat_id, const String& from_name) {
 
 void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
     if (isDeviceOwner(chat_id)) {
-        String msg = "📦 *STATUS PERANGKAT FEBOX*\n\n";
+        String msg;
+        msg.reserve(512);
+        msg = "📦 *STATUS PERANGKAT FEBOX*\n\n";
         msg += "✅ *Boks ini telah tertaut ke akun Anda!*\n";
         msg += "• ID Perangkat: `" + deviceId + "`\n";
         msg += "• Pemilik Terdaftar: *" + deviceOwnerName + "*\n";
@@ -524,7 +559,9 @@ void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
         bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", kb);
     }
     else if (deviceOwnerChatId.length() > 0) {
-        String msg = "📦 *STATUS PERANGKAT FEBOX*\n\n";
+        String msg;
+        msg.reserve(512);
+        msg = "📦 *STATUS PERANGKAT FEBOX*\n\n";
         msg += "⚠️ *Boks Sedang Dimiliki Pengguna Lain*\n";
         msg += "Boks fisik ini saat ini sudah ditautkan ke pengguna lain (*" + deviceOwnerName + "*).\n";
         msg += "Satu boks fisik FEBOX hanya dapat dimiliki oleh 1 akun pengguna.\n\n";
@@ -533,7 +570,9 @@ void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
         bot.sendMessage(chat_id, msg, "Markdown");
     }
     else {
-        String msg = "📦 *PENAUTAN PERANGKAT FEBOX*\n\n";
+        String msg;
+        msg.reserve(512);
+        msg = "📦 *PENAUTAN PERANGKAT FEBOX*\n\n";
         msg += "Boks fisik FEBOX ini saat ini berstatus *Tersedia* (belum memiliki pemilik).\n\n";
         msg += "Untuk menautkan boks fisik ini ke akun Anda, ketik:\n";
         msg += "`/tautkan " + deviceId + "`\n\n";
@@ -573,8 +612,9 @@ void handlePairDevice(const String& chat_id, const String& from_name, String inp
         saveDeviceOwner();
 
         // Pastikan user terdaftar sebagai subscriber aktif
-        Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-        s.active = true;
+        Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+        if (s == nullptr) return;
+        s->active = true;
         saveSubscribers();
 
         // Audio feedback ceria pada alat fisik (2 nada tinggi)
@@ -584,7 +624,7 @@ void handlePairDevice(const String& chat_id, const String& from_name, String inp
         msg += "Boks *FEBOX (" + deviceId + ")* kini resmi terhubung dengan akun Anda (*" + from_name + "*).\n\n";
         msg += "🔊 *Fitur Unggulan Aktif:*\n";
         msg += "• Alarm buzzer suara pada boks fisik akan berbunyi khusus saat jadwal minum obat Anda tiba!\n";
-        msg += "• Jadwal Anda: *" + formatDays(s.daysMask) + "* pukul *" + formatTime(s.hour, s.minute) + "*\n\n";
+        msg += "• Jadwal Anda: *" + formatDays(s->daysMask) + "* pukul *" + formatTime(s->hour, s->minute) + "*\n\n";
         msg += "💡 _Untuk me-reset kepemilikan boks sewaktu-waktu, Anda bisa mengetik `/lepaskan` atau menekan tombol fisik boks selama 20 detik._";
 
         bot.sendMessage(chat_id, msg, "Markdown");
@@ -623,7 +663,9 @@ void sendStartMessage(const String& chat_id, const String& from_name) {
     bool isSubbed = (s != nullptr && s->active);
     bool isOwner = isDeviceOwner(chat_id);
 
-    String greeting = "👋 *Halo, " + from_name + "! Selamat datang di FEBOX* 🩸\n";
+    String greeting;
+    greeting.reserve(768);
+    greeting = "👋 *Halo, " + from_name + "! Selamat datang di FEBOX* 🩸\n";
     greeting += "_(Smart Pillbox Pengingat Tablet Tambah Darah / Fe)_\n\n";
     greeting += "FEBOX membantu Anda meminum Tablet Tambah Darah secara tepat waktu demi mencegah dan mengatasi anemia.\n\n";
 
@@ -679,7 +721,9 @@ void sendStatus(const String& chat_id, const String& from_name) {
 
     bool isOwner = isDeviceOwner(chat_id);
 
-    String rep = "📋 *STATUS PENGINGAT FEBOX*\n";
+    String rep;
+    rep.reserve(1024);
+    rep = "📋 *STATUS PENGINGAT FEBOX*\n";
     rep += "━━━━━━━━━━━━━━━━━━━━\n";
     rep += "👤 Nama: *" + from_name + "*\n";
     if (s != nullptr && s->active) {
@@ -710,13 +754,15 @@ void sendStatus(const String& chat_id, const String& from_name) {
     rep += "━━━━━━━━━━━━━━━━━━━━\n";
     rep += "🕒 *Waktu Box:* " + String(clockBuf) + "\n";
     rep += "📆 *Tanggal:* " + String(dateBuf) + "\n";
-    rep += "👥 *Total Pengguna Terdaftar:* " + String(subscriberList.size()) + "\n";
+    rep += "👥 *Total Pengguna Terdaftar:* " + String(subscriberList.size()) + " / " + String(MAX_SUBSCRIBERS) + "\n";
 
     bot.sendMessage(chat_id, rep, "Markdown");
 }
 
 void sendHelp(const String& chat_id) {
-    String help = "📖 *PANDUAN & BANTUAN FEBOX* 🩸\n\n";
+    String help;
+    help.reserve(1024);
+    help = "📖 *PANDUAN & BANTUAN FEBOX* 🩸\n\n";
     help += "*Daftar Perintah Bot:*\n";
     help += "• `/start` - Buka menu utama & cek status awal\n";
     help += "• `/status` - Cek jadwal & status tautan boks\n";
@@ -753,13 +799,14 @@ void handleSubscribe(const String& chat_id, const String& from_name) {
         return;
     }
 
-    Subscriber& sub = getOrCreateSubscriber(chat_id, from_name);
-    sub.active = true;
+    Subscriber* sub = getOrCreateSubscriber(chat_id, from_name);
+    if (sub == nullptr) return;
+    sub->active = true;
     saveSubscribers();
 
     String msg = "✅ *Berhasil Berlangganan Pengingat Fe!*\n\n";
-    msg += "📅 Hari: *" + formatDays(sub.daysMask) + "*\n";
-    msg += "⏰ Jam: *" + formatTime(sub.hour, sub.minute) + "*\n";
+    msg += "📅 Hari: *" + formatDays(sub->daysMask) + "*\n";
+    msg += "⏰ Jam: *" + formatTime(sub->hour, sub->minute) + "*\n";
     msg += "🔔 Status: *Aktif*\n\n";
     msg += "💡 _Tips: Klik *⏰ Atur Jadwal* kapan saja untuk menyesuaikan hari dan jam._";
     bot.sendMessage(chat_id, msg, "Markdown");
@@ -799,16 +846,17 @@ void handleCustomJadwal(const String& chat_id, const String& from_name, String a
         if (parseTime(timePart, h, m)) {
             d = parseDays(daysPart);
             if (d > 0) {
-                Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-                s.daysMask = d;
-                s.hour = h;
-                s.minute = m;
-                s.active = true;
+                Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+                if (s == nullptr) return;
+                s->daysMask = d;
+                s->hour = h;
+                s->minute = m;
+                s->active = true;
                 saveSubscribers();
 
                 String res = "✅ *Jadwal Pengingat Berhasil Diatur!*\n\n";
-                res += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
-                res += "⏰ Waktu: *" + formatTime(s.hour, s.minute) + "*\n";
+                res += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
+                res += "⏰ Waktu: *" + formatTime(s->hour, s->minute) + "*\n";
                 res += "🔔 Status: *Aktif*\n\n";
                 res += "Kotak obat FEBOX akan membunyikan alarm dan mengirim notifikasi sesuai jadwal tersebut.";
                 bot.sendMessage(chat_id, res, "Markdown");
@@ -819,15 +867,16 @@ void handleCustomJadwal(const String& chat_id, const String& from_name, String a
 
     // Jika user hanya memasukkan jam (misal "/jadwal 20:00")
     if (parseTime(args, h, m)) {
-        Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-        s.hour = h;
-        s.minute = m;
-        s.active = true;
+        Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+        if (s == nullptr) return;
+        s->hour = h;
+        s->minute = m;
+        s->active = true;
         saveSubscribers();
 
         String res = "✅ *Jam Pengingat Berhasil Diperbarui!*\n\n";
-        res += "⏰ Jam: *" + formatTime(s.hour, s.minute) + "*\n";
-        res += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
+        res += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
+        res += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
         res += "🔔 Status: *Aktif*";
         bot.sendMessage(chat_id, res, "Markdown");
         return;
@@ -836,14 +885,15 @@ void handleCustomJadwal(const String& chat_id, const String& from_name, String a
     // Jika user hanya memasukkan hari (misal "/jadwal jumat" atau "/jadwal senin,kamis")
     d = parseDays(args);
     if (d > 0) {
-        Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-        s.daysMask = d;
-        s.active = true;
+        Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+        if (s == nullptr) return;
+        s->daysMask = d;
+        s->active = true;
         saveSubscribers();
 
         String res = "✅ *Hari Pengingat Berhasil Diperbarui!*\n\n";
-        res += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
-        res += "⏰ Jam: *" + formatTime(s.hour, s.minute) + "*\n";
+        res += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
+        res += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
         res += "🔔 Status: *Aktif*";
         bot.sendMessage(chat_id, res, "Markdown");
         return;
@@ -863,15 +913,16 @@ void handleCustomJadwal(const String& chat_id, const String& from_name, String a
 void handleCustomJam(const String& chat_id, const String& from_name, String args) {
     int h, m;
     if (parseTime(args, h, m)) {
-        Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-        s.hour = h;
-        s.minute = m;
-        s.active = true;
+        Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+        if (s == nullptr) return;
+        s->hour = h;
+        s->minute = m;
+        s->active = true;
         saveSubscribers();
 
         String reply = "✅ *Jam Pengingat Berhasil Diperbarui!*\n";
-        reply += "⏰ Jam: *" + formatTime(s.hour, s.minute) + "*\n";
-        reply += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
+        reply += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
+        reply += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
         reply += "🔔 Status: *Aktif*";
         bot.sendMessage(chat_id, reply, "Markdown");
     } else {
@@ -882,14 +933,15 @@ void handleCustomJam(const String& chat_id, const String& from_name, String args
 void handleCustomHari(const String& chat_id, const String& from_name, String args) {
     uint8_t d = parseDays(args);
     if (d > 0) {
-        Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-        s.daysMask = d;
-        s.active = true;
+        Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+        if (s == nullptr) return;
+        s->daysMask = d;
+        s->active = true;
         saveSubscribers();
 
         String reply = "✅ *Hari Pengingat Berhasil Diperbarui!*\n";
-        reply += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
-        reply += "⏰ Jam: *" + formatTime(s.hour, s.minute) + "*\n";
+        reply += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
+        reply += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
         reply += "🔔 Status: *Aktif*";
         bot.sendMessage(chat_id, reply, "Markdown");
     } else {
@@ -921,103 +973,123 @@ void handleStopAlarm(const String& chat_id, const String& from_name) {
 void handleCallbackQuery(const String& chat_id, const String& from_name, const String& query_id, const String& data, int message_id) {
     bot.answerCallbackQuery(query_id, "Pilihan diterima!");
 
-    Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
-
     if (data == "stop_buzzer") {
         handleStopAlarm(chat_id, from_name);
+        return;
     }
     else if (data == "pair_current_device") {
         handlePairDevice(chat_id, from_name, deviceId);
+        return;
     }
     else if (data == "unpair_device") {
         handleUnpairDevice(chat_id, from_name);
+        return;
     }
     else if (data == "menu_device") {
         sendDeviceLinkMenu(chat_id, from_name);
+        return;
     }
-    else if (data == "set_fri_20") {
-        s.daysMask = 32;
-        s.hour = 20;
-        s.minute = 0;
-        s.active = true;
+    else if (data == "menu_status") {
+        sendStatus(chat_id, from_name);
+        return;
+    }
+    else if (data == "menu_schedule") {
+        sendScheduleMenu(chat_id, from_name);
+        return;
+    }
+    else if (data == "menu_hour") {
+        Subscriber* s = findSubscriber(chat_id);
+        int curH = (s != nullptr) ? s->hour : 20;
+        int curM = (s != nullptr) ? s->minute : 0;
+        String msg;
+        msg.reserve(256);
+        msg = "🕐 *PILIH JAM PENGINGAT*\n\n";
+        msg += "Jam saat ini: *" + formatTime(curH, curM) + "*\n";
+        msg += "Pilih rekomendasi jam di bawah atau ketik `/jam JJ:MM`:";
+        bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", getHoursInlineKeyboard());
+        return;
+    }
+    else if (data == "menu_day") {
+        Subscriber* s = findSubscriber(chat_id);
+        uint8_t curD = (s != nullptr) ? s->daysMask : 32;
+        String msg;
+        msg.reserve(256);
+        msg = "🗓️ *PILIH HARI PENGINGAT*\n\n";
+        msg += "Pola hari saat ini: *" + formatDays(curD) + "*\n";
+        msg += "Pilih pola hari di bawah atau ketik `/hari nama_hari`:";
+        bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", getDaysInlineKeyboard());
+        return;
+    }
+
+    // Aksi yang menambahkan/memperbarui data subscriber
+    Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
+    if (s == nullptr) return;
+
+    if (data == "set_fri_20") {
+        s->daysMask = 32;
+        s->hour = 20;
+        s->minute = 0;
+        s->active = true;
         saveSubscribers();
         String msg = "✅ *Jadwal Diatur: Setiap Jumat 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
     else if (data == "set_daily_20") {
-        s.daysMask = 127;
-        s.hour = 20;
-        s.minute = 0;
-        s.active = true;
+        s->daysMask = 127;
+        s->hour = 20;
+        s->minute = 0;
+        s->active = true;
         saveSubscribers();
         String msg = "✅ *Jadwal Diatur: Setiap Hari 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
     else if (data == "set_mwth_20") {
-        s.daysMask = ((1 << 1) | (1 << 3) | (1 << 4)); // Senin, Rabu, Kamis
-        s.hour = 20;
-        s.minute = 0;
-        s.active = true;
+        s->daysMask = ((1 << 1) | (1 << 3) | (1 << 4)); // Senin, Rabu, Kamis
+        s->hour = 20;
+        s->minute = 0;
+        s->active = true;
         saveSubscribers();
         String msg = "✅ *Jadwal Diatur: Senin, Rabu, Kamis 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
     else if (data == "set_mth_20") {
-        s.daysMask = ((1 << 1) | (1 << 4)); // Senin & Kamis
-        s.hour = 20;
-        s.minute = 0;
-        s.active = true;
+        s->daysMask = ((1 << 1) | (1 << 4)); // Senin & Kamis
+        s->hour = 20;
+        s->minute = 0;
+        s->active = true;
         saveSubscribers();
         String msg = "✅ *Jadwal Diatur: Senin & Kamis 20:00 WIB*\nStatus pengingat kini *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
-    }
-    else if (data == "menu_schedule") {
-        sendScheduleMenu(chat_id, from_name);
-    }
-    else if (data == "menu_hour") {
-        String msg = "🕐 *PILIH JAM PENGINGAT*\n\n";
-        msg += "Jam saat ini: *" + formatTime(s.hour, s.minute) + "*\n";
-        msg += "Pilih rekomendasi jam di bawah atau ketik `/jam JJ:MM`:";
-        bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", getHoursInlineKeyboard());
-    }
-    else if (data == "menu_day") {
-        String msg = "🗓️ *PILIH HARI PENGINGAT*\n\n";
-        msg += "Pola hari saat ini: *" + formatDays(s.daysMask) + "*\n";
-        msg += "Pilih pola hari di bawah atau ketik `/hari nama_hari`:";
-        bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", getDaysInlineKeyboard());
-    }
-    else if (data == "menu_status") {
-        sendStatus(chat_id, from_name);
     }
     else if (data.startsWith("h_")) {
         // Format h_HH_MM
         int h = data.substring(2, 4).toInt();
         int m = data.substring(5, 7).toInt();
-        s.hour = h;
-        s.minute = m;
-        s.active = true;
+        s->hour = h;
+        s->minute = m;
+        s->active = true;
         saveSubscribers();
 
         String msg = "✅ *Jam Pengingat Diperbarui!*\n";
-        msg += "⏰ Jam: *" + formatTime(s.hour, s.minute) + "*\n";
-        msg += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
+        msg += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
+        msg += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
         msg += "🔔 Status: *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
     else if (data.startsWith("d_")) {
-        if (data == "d_fri") s.daysMask = 32;
-        else if (data == "d_daily") s.daysMask = 127;
-        else if (data == "d_mwth") s.daysMask = ((1 << 1) | (1 << 3) | (1 << 4));
-        else if (data == "d_mth") s.daysMask = ((1 << 1) | (1 << 4));
-        else if (data == "d_weekdays") s.daysMask = ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5));
-        else if (data == "d_weekend") s.daysMask = ((1 << 0) | (1 << 6));
+        if (data == "d_fri") s->daysMask = 32;
+        else if (data == "d_daily") s->daysMask = 127;
+        else if (data == "d_mwth") s->daysMask = ((1 << 1) | (1 << 3) | (1 << 4));
+        else if (data == "d_mth") s->daysMask = ((1 << 1) | (1 << 4));
+        else if (data == "d_weekdays") s->daysMask = ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5));
+        else if (data == "d_weekend") s->daysMask = ((1 << 0) | (1 << 6));
 
-        s.active = true;
+        s->active = true;
         saveSubscribers();
 
         String msg = "✅ *Hari Pengingat Diperbarui!*\n";
-        msg += "📅 Hari: *" + formatDays(s.daysMask) + "*\n";
-        msg += "⏰ Jam: *" + formatTime(s.hour, s.minute) + "*\n";
+        msg += "📅 Hari: *" + formatDays(s->daysMask) + "*\n";
+        msg += "⏰ Jam: *" + formatTime(s->hour, s->minute) + "*\n";
         msg += "🔔 Status: *Aktif* ✅";
         bot.sendMessage(chat_id, msg, "Markdown");
     }
