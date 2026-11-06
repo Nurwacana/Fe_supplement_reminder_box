@@ -157,7 +157,11 @@ String getDaysInlineKeyboard() {
     "]";
 }
 
-// ==================== KONTROL AUDIO (BUZZER) ====================
+// ==================== KONTROL AUDIO (BUZZER) & ALARM ====================
+
+bool isAlarmRinging = false;
+unsigned long alarmStartTime = 0;
+const unsigned long ALARM_MAX_DURATION = 120000; // Maksimal berbunyi 2 menit jika tidak dimatikan
 
 void initBuzzer() {
     ledcSetup(PWM_CHANNEL, 2700, PWM_RES);
@@ -189,7 +193,50 @@ void beep(int count, int durationMs, int pauseMs = 100, unsigned int freq = 2700
     }
 }
 
-// Nada alarm khusus pengingat minum obat
+void startAlarm() {
+    isAlarmRinging = true;
+    alarmStartTime = millis();
+    Serial.println("\n[Alarm] >>> ALARM BUZZER AKTIF! <<< Menunggu dimatikan via tombol atau Telegram...");
+}
+
+void stopAlarm() {
+    if (isAlarmRinging) {
+        isAlarmRinging = false;
+        buzzerNoTone();
+        digitalWrite(LED_PIN, HIGH);
+        Serial.println("[Alarm] Alarm buzzer berhasil DIMATIKAN.");
+    }
+}
+
+// Loop update non-blocking untuk pola bunyi buzzer dan kedipan LED alarm
+void updateAlarmBuzzer() {
+    if (!isAlarmRinging) return;
+
+    unsigned long elapsed = millis() - alarmStartTime;
+    if (elapsed > ALARM_MAX_DURATION) {
+        stopAlarm();
+        Serial.println("[Alarm] Batas waktu maksimal 2 menit tercapai. Alarm berhenti otomatis.");
+        return;
+    }
+
+    // Pola pengingat: 2 beep berulang setiap 2.5 detik
+    unsigned long cycle = elapsed % 2500;
+    if (cycle < 100) {
+        buzzerTone(2700);
+        digitalWrite(LED_PIN, LOW);
+    } else if (cycle >= 100 && cycle < 180) {
+        buzzerNoTone();
+        digitalWrite(LED_PIN, HIGH);
+    } else if (cycle >= 180 && cycle < 280) {
+        buzzerTone(2700);
+        digitalWrite(LED_PIN, LOW);
+    } else {
+        buzzerNoTone();
+        digitalWrite(LED_PIN, HIGH);
+    }
+}
+
+// Nada alarm statis untuk uji coba singkat
 void playAlarmTone() {
     for (int k = 0; k < 5; k++) {
         beep(2, 100, 80, 2700);
@@ -681,9 +728,12 @@ void sendHelp(const String& chat_id) {
     help += "• `/lepaskan` - Lepaskan tautan boks fisik Anda\n";
     help += "• `/subscribe` - Aktifkan pengingat\n";
     help += "• `/unsubscribe` - Nonaktifkan pengingat\n";
+    help += "• `/matikan` atau `/stop_alarm` - Matikan alarm buzzer dari jauh via Telegram\n";
     help += "• `/tes_alarm` - Uji coba buzzer (khusus pemilik boks)\n\n";
-    help += "🔘 *Reset Fisik Boks (20 Detik):*\n";
-    help += "Tekan tombol fisik pada boks selama 20 detik untuk menghapus data pemilik. Pemilik lama akan menerima notifikasi Telegram bahwa boks telah terlepas.\n\n";
+    help += "🔘 *Fungsi Tombol Fisik pada Boks (Pin 2):*\n";
+    help += "• *1x Klik Saat Alarm Berbunyi:* Langsung mematikan buzzer alarm.\n";
+    help += "• *3x Klik Cepat Berturut-turut:* Reset WiFi AP boks (buka portal Fe-Reminder-Setup).\n";
+    help += "• *Tahan 20 Detik:* Reset kepemilikan boks & kirim notifikasi ke Telegram pemilik.\n\n";
     help += "💡 *Tips Minum Tablet Tambah Darah (Fe):*\n";
     help += "1. Minum malam hari setelah makan / menjelang tidur untuk meminimalkan rasa mual.\n";
     help += "2. Minum dengan segelas air putih atau jus jeruk (Vitamin C meningkatkan penyerapan zat besi).\n";
@@ -849,12 +899,34 @@ void handleCustomHari(const String& chat_id, const String& from_name, String arg
 
 // ==================== HANDLER CALLBACK QUERY & PESAN ====================
 
+void handleStopAlarm(const String& chat_id, const String& from_name) {
+    if (!isDeviceOwner(chat_id)) {
+        bot.sendMessage(chat_id, "ℹ️ Akun Anda saat ini tidak sedang menautkan perangkat boks fisik FEBOX.", "");
+        return;
+    }
+
+    if (isAlarmRinging) {
+        stopAlarm();
+        Serial.printf("[Alarm] Alarm buzzer dimatikan via Telegram oleh %s (%s).\n", from_name.c_str(), chat_id.c_str());
+
+        String msg = "🔕 *Alarm Buzzer Berhasil Dimatikan!* ✅\n\n";
+        msg += "Buzzer pada boks fisik FEBOX Anda telah dimatikan.\n";
+        msg += "Terima kasih sudah meminum Tablet Tambah Darah tepat waktu! Tetap sehat dan berenergi! 💪✨";
+        bot.sendMessage(chat_id, msg, "Markdown");
+    } else {
+        bot.sendMessage(chat_id, "ℹ️ Alarm boks saat ini sedang tidak berbunyi.", "");
+    }
+}
+
 void handleCallbackQuery(const String& chat_id, const String& from_name, const String& query_id, const String& data, int message_id) {
     bot.answerCallbackQuery(query_id, "Pilihan diterima!");
 
     Subscriber& s = getOrCreateSubscriber(chat_id, from_name);
 
-    if (data == "pair_current_device") {
+    if (data == "stop_buzzer") {
+        handleStopAlarm(chat_id, from_name);
+    }
+    else if (data == "pair_current_device") {
         handlePairDevice(chat_id, from_name, deviceId);
     }
     else if (data == "unpair_device") {
@@ -992,6 +1064,9 @@ void handleTextMessage(const String& chat_id, const String& from_name, const Str
     else if (textLower == "/unsubscribe" || textLower == "/stop" || textLower == "🔕 berhenti") {
         handleUnsubscribe(chat_id, from_name);
     }
+    else if (textLower == "/matikan" || textLower == "/stop_alarm" || textLower == "/matikan_alarm" || textLower == "/diam" || textLower == "🔕 matikan alarm") {
+        handleStopAlarm(chat_id, from_name);
+    }
     else if (textLower == "/tes_alarm" || textLower == "🧪 tes alarm") {
         if (isDeviceOwner(chat_id)) {
             bot.sendMessage(chat_id, "🧪 Memulai tes buzzer alarm pada boks FEBOX Anda...", "");
@@ -1054,9 +1129,31 @@ void configModeCallback(WiFiManager *myWiFiManager) {
     beep(2, 80, 80, 2000);
 }
 
-void checkResetButton() {
+void handlePhysicalButton() {
     pinMode(RESET_PIN, INPUT_PULLUP);
+
+    static int clickCount = 0;
+    static unsigned long lastReleaseTime = 0;
+
     if (digitalRead(RESET_PIN) == LOW) {
+        // A. JIKA ALARM SEDANG BERBUNYI: 1x klik langsung matikan alarm seketika!
+        if (isAlarmRinging) {
+            stopAlarm();
+            beep(1, 80, 0, 3200);
+            Serial.println("[Button] Alarm buzzer boks dimatikan via tombol fisik.");
+
+            if (deviceOwnerChatId.length() > 0 && WiFi.status() == WL_CONNECTED) {
+                bot.sendMessage(deviceOwnerChatId, "🔔 *Alarm boks telah dimatikan via tombol fisik.* Jangan lupa minum air putih! 👍", "Markdown");
+            }
+
+            while (digitalRead(RESET_PIN) == LOW) {
+                delay(30);
+            }
+            clickCount = 0;
+            return;
+        }
+
+        // B. JIKA ALARM TIDAK BERBUNYI:
         unsigned long startPress = millis();
         Serial.println("\n[Button] Tombol fisik boks mulai ditekan...");
 
@@ -1119,8 +1216,31 @@ void checkResetButton() {
 
         if (!resetCompleted) {
             unsigned long duration = millis() - startPress;
-            Serial.printf("[Button] Tombol dilepas setelah %lu ms (reset 20 detik dibatalkan).\n", duration);
+            if (duration < 1500) {
+                clickCount++;
+                lastReleaseTime = millis();
+                beep(1, 20, 0, 2600);
+                Serial.printf("[Button] Klik ke-%d terdeteksi.\n", clickCount);
+            } else {
+                Serial.printf("[Button] Tombol dilepas setelah %lu ms (reset dibatalkan).\n", duration);
+            }
         }
+    }
+
+    // 2. Deteksi triple click setelah timeout 450 ms
+    if (clickCount > 0 && (millis() - lastReleaseTime > 450)) {
+        if (clickCount == 3) {
+            Serial.println("\n[Action] TRIPLE CLICK terdeteksi! Mereset pengaturan WiFi AP...");
+            beep(3, 80, 50, 3200);
+
+            WiFiManager wm;
+            wm.resetSettings();
+            delay(1000);
+            ESP.restart();
+        } else {
+            Serial.printf("[Button] Sequence selesai (%d klik). Tidak ada aksi khusus.\n", clickCount);
+        }
+        clickCount = 0;
     }
 }
 
@@ -1185,7 +1305,7 @@ void setup() {
         }
     }
 
-    checkResetButton();
+    handlePhysicalButton();
 
     WiFi.mode(WIFI_AP_STA);
     WiFi.setTxPower(WIFI_POWER_8_5dBm);
@@ -1221,7 +1341,8 @@ void setup() {
 // ==================== LOOP ====================
 
 void loop() {
-    checkResetButton();
+    handlePhysicalButton();
+    updateAlarmBuzzer();
 
     static unsigned long lastBotCheck = 0;
     static unsigned long lastClockPrint = 0;
@@ -1276,14 +1397,20 @@ void loop() {
                             msg += "Halo *" + sub.name + "*! Waktunya minum Tablet Tambah Darah sekarang (" + 
                                    formatTime(sub.hour, sub.minute) + ").\n\n";
                             if (isOwner) {
-                                msg += "🔊 _Alarm boks fisik FEBOX Anda sedang berbunyi._\n\n";
+                                msg += "🔊 *Alarm boks fisik FEBOX Anda sedang berbunyi!*\n";
+                                msg += "_Tekan tombol boks atau klik tombol di bawah untuk mematikan alarm._\n\n";
                             }
                             msg += "💡 *Tips Penting:*\n";
                             msg += "• Minum dengan air putih atau jus jeruk (Vitamin C meningkatkan penyerapan zat besi).\n";
                             msg += "• *Hindari* teh, kopi, atau susu saat meminumnya karena menghambat penyerapan.\n\n";
                             msg += "Tetap sehat, bugar, dan bebas anemia! 💪✨";
 
-                            bot.sendMessage(sub.chatId, msg, "Markdown");
+                            if (isOwner) {
+                                String stopKb = "[ [{\"text\":\"🔕 Matikan Alarm Buzzer\",\"callback_data\":\"stop_buzzer\"}] ]";
+                                bot.sendMessageWithInlineKeyboard(sub.chatId, msg, "Markdown", stopKb);
+                            } else {
+                                bot.sendMessage(sub.chatId, msg, "Markdown");
+                            }
                         }
 
                         // Hanya aktifkan buzzer fisik jika pengguna ini adalah pemilik sah boks!
@@ -1296,7 +1423,7 @@ void loop() {
         }
 
         if (buzzerTriggeredThisCycle) {
-            playAlarmTone();
+            startAlarm();
         }
     }
 }
