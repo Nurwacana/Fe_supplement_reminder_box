@@ -17,6 +17,7 @@ Proyek ini bersifat **inklusif**: pengguna yang memiliki perangkat boks fisik da
   - Pilihan hari: Setiap hari atau kombinasi hari tertentu (misal: Senin, Rabu, Kamis / Jumat saja).
   - Pilihan jam pengingat kustom (format `JJ:MM`, misal: `20:00` atau `06:30`).
 - **🔕 Remote Stop Alarm via Telegram**: Jika boks berdering dan berada jauh dari jangkauan, pemilik dapat mematikan alarm langsung lewat tombol inline Telegram atau perintah `/matikan`.
+- **🎵 Melodi Nada Dering Alarm Kustom (Samsung & Nokia)**: Menggunakan pola `RingtoneStep` pada file terpisah [`ringtones.h`](file:///D:/00_Project/Fe_supplement_reminder_box/fe_supplement_reminder_fw/include/ringtones.h) dengan pilihan motif Samsung *"Over the Horizon"* dan *"Nokia Tune"*, tersedia pilihan frekuensi asli dan nada resonansi tinggi (+1 oktaf) yang dioptimalkan untuk kekerasan suara maksimal pada buzzer piezo. Nada dapat diatur & dites langsung via perintah `/nada`.
 - **🔘 Multifungsi Tombol Fisik Non-Blocking (Pin 2)**:
   - **1x Tekan (saat alarm berbunyi)**: Langsung mematikan/membisukan alarm buzzer.
   - **3x Klik Cepat**: Mereset pengaturan Wi-Fi (membuka kembali portal konfigurasi Wi-Fi).
@@ -183,6 +184,7 @@ Fe_supplement_reminder_box/
     ├── platformio.ini                  # Konfigurasi board, framework, lib_deps
     ├── include/
     │   ├── README
+    │   ├── ringtones.h                 # Definisi melodi & notasi nada buzzer (Samsung, Nokia)
     │   ├── secrets.h.example           # Template aman kredensial bot token
     │   └── secrets.h                   # Kredensial lokal (tidak masuk git)
     ├── lib/                            # Pustaka kustom tambahan (jika ada)

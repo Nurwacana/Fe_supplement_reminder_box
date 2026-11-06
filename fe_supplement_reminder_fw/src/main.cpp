@@ -11,6 +11,12 @@
 #include <Preferences.h>
 #include <vector>
 
+#if __has_include("ringtones.h")
+#include "ringtones.h"
+#elif __has_include("include/ringtones.h")
+#include "include/ringtones.h"
+#endif
+
 // ==================== KONFIGURASI ====================
 
 // Muat BOT_TOKEN dari secrets.h
@@ -208,7 +214,53 @@ void stopAlarm() {
     }
 }
 
-// Loop update non-blocking untuk pola bunyi buzzer dan kedipan LED alarm
+// ==================== MANAJEMEN NADA DERING ALARM ====================
+
+RingtoneChoice activeRingtoneChoice = RT_SAMSUNG_RESONANT;
+
+const RingtoneStep* getActiveRingtonePtr(size_t &outSteps) {
+    switch (activeRingtoneChoice) {
+        case RT_SAMSUNG_ORIGINAL:
+            outSteps = SAMSUNG_STEPS;
+            return samsung_ringtone;
+        case RT_NOKIA_RESONANT:
+            outSteps = NOKIA_STEPS;
+            return nokia_ringtone_resonant;
+        case RT_NOKIA_ORIGINAL:
+            outSteps = NOKIA_STEPS;
+            return nokia_ringtone;
+        case RT_SAMSUNG_RESONANT:
+        default:
+            outSteps = SAMSUNG_STEPS;
+            return samsung_ringtone_resonant;
+    }
+}
+
+String getRingtoneName(RingtoneChoice choice) {
+    switch (choice) {
+        case RT_SAMSUNG_RESONANT: return "Samsung 'Over the Horizon' (Resonansi Nyaring) ⭐";
+        case RT_SAMSUNG_ORIGINAL: return "Samsung 'Over the Horizon' (Frekuensi Asli)";
+        case RT_NOKIA_RESONANT:   return "Nokia Tune (Resonansi Nyaring) ⭐";
+        case RT_NOKIA_ORIGINAL:   return "Nokia Tune (Frekuensi Asli)";
+        default: return "Samsung (Resonansi)";
+    }
+}
+
+void saveRingtoneChoice() {
+    prefs.begin("fe_bot", false);
+    prefs.putInt("rt_choice", (int)activeRingtoneChoice);
+    prefs.end();
+}
+
+uint32_t getRingtoneDuration(const RingtoneStep* ringtone, size_t steps) {
+    uint32_t total = 0;
+    for (size_t i = 0; i < steps; i++) {
+        total += ringtone[i].play_ms + ringtone[i].pause_ms;
+    }
+    return total;
+}
+
+// Loop update non-blocking untuk memainkan melodi nada dering pengingat & kedipan LED
 void updateAlarmBuzzer() {
     if (!isAlarmRinging) return;
 
@@ -219,29 +271,62 @@ void updateAlarmBuzzer() {
         return;
     }
 
-    // Pola pengingat: 2 beep berulang setiap 2.5 detik
-    unsigned long cycle = elapsed % 2500;
-    if (cycle < 100) {
-        buzzerTone(2700);
-        digitalWrite(LED_PIN, LOW);
-    } else if (cycle >= 100 && cycle < 180) {
+    size_t steps = 0;
+    const RingtoneStep* ringtone = getActiveRingtonePtr(steps);
+    uint32_t totalDuration = getRingtoneDuration(ringtone, steps);
+    if (totalDuration == 0) return;
+
+    uint32_t pos = elapsed % totalDuration;
+    uint32_t accum = 0;
+
+    for (size_t i = 0; i < steps; i++) {
+        uint32_t playEnd = accum + ringtone[i].play_ms;
+        uint32_t stepEnd = playEnd + ringtone[i].pause_ms;
+
+        if (pos < playEnd) {
+            if (ringtone[i].freq > 0) {
+                buzzerTone(ringtone[i].freq);
+            } else {
+                buzzerNoTone();
+            }
+            digitalWrite(LED_PIN, LOW); // LED menyala saat nada berbunyi
+            return;
+        } else if (pos < stepEnd) {
+            buzzerNoTone();
+            digitalWrite(LED_PIN, HIGH); // LED padam saat jeda antar nada
+            return;
+        }
+        accum = stepEnd;
+    }
+
+    buzzerNoTone();
+    digitalWrite(LED_PIN, HIGH);
+}
+
+// Pemutaran melodi sinkron untuk uji coba (/tes_alarm dan pratinjau nada)
+void playRingtoneSync(const RingtoneStep* ringtone, size_t steps) {
+    for (size_t i = 0; i < steps; i++) {
+        if (ringtone[i].freq > 0) {
+            buzzerTone(ringtone[i].freq);
+            digitalWrite(LED_PIN, LOW);
+        } else {
+            buzzerNoTone();
+            digitalWrite(LED_PIN, HIGH);
+        }
+        delay(ringtone[i].play_ms);
+
         buzzerNoTone();
         digitalWrite(LED_PIN, HIGH);
-    } else if (cycle >= 180 && cycle < 280) {
-        buzzerTone(2700);
-        digitalWrite(LED_PIN, LOW);
-    } else {
-        buzzerNoTone();
-        digitalWrite(LED_PIN, HIGH);
+        if (ringtone[i].pause_ms > 0) {
+            delay(ringtone[i].pause_ms);
+        }
     }
 }
 
-// Nada alarm statis untuk uji coba singkat
 void playAlarmTone() {
-    for (int k = 0; k < 5; k++) {
-        beep(2, 100, 80, 2700);
-        delay(200);
-    }
+    size_t steps = 0;
+    const RingtoneStep* ringtone = getActiveRingtonePtr(steps);
+    playRingtoneSync(ringtone, steps);
 }
 
 // Nada melodi khas saat berhasil terhubung ke jaringan Wi-Fi (Chime ceria bertingkat naik)
@@ -464,6 +549,7 @@ void loadSubscribers() {
     prefs.begin("fe_bot", false);
     deviceOwnerChatId = prefs.getString("owner_chat", "");
     deviceOwnerName = prefs.getString("owner_name", "");
+    activeRingtoneChoice = (RingtoneChoice)prefs.getInt("rt_choice", (int)RT_SAMSUNG_RESONANT);
     String data = prefs.getString("v2_subs", "");
 
     subscriberList.clear();
@@ -564,11 +650,13 @@ void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
         msg += "✅ *Boks ini telah tertaut ke akun Anda!*\n";
         msg += "• ID Perangkat: `" + deviceId + "`\n";
         msg += "• Pemilik Terdaftar: *" + deviceOwnerName + "*\n";
-        msg += "• Alarm Fisik (Buzzer): *Aktif untuk Anda* 🔊\n\n";
+        msg += "• Alarm Fisik (Buzzer): *Aktif untuk Anda* 🔊\n";
+        msg += "• Nada Alarm: *" + getRingtoneName(activeRingtoneChoice) + "* 🎵\n\n";
         msg += "Setiap kali jadwal pengingat Anda tiba, boks fisik ini akan berbunyi dan LED akan menyala.\n\n";
-        msg += "💡 _Jika ingin melepaskan boks ini agar bisa digunakan akun lain, klik tombol di bawah atau ketik `/lepaskan`._";
+        msg += "💡 _Gunakan menu di bawah untuk mengatur nada dering atau melepaskan tautan boks:_";
 
-        String kb = "[ [{\"text\":\"🔓 Lepaskan Tautan Boks\",\"callback_data\":\"unpair_device\"}] ]";
+        String kb = "[ [{\"text\":\"🎵 Atur Nada Dering Alarm\",\"callback_data\":\"menu_ringtone\"}],"
+                    " [{\"text\":\"🔓 Lepaskan Tautan Boks\",\"callback_data\":\"unpair_device\"}] ]";
         bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", kb);
     }
     else if (deviceOwnerChatId.length() > 0) {
@@ -597,6 +685,28 @@ void sendDeviceLinkMenu(const String& chat_id, const String& from_name) {
         String note = "📱 *Informasi Tambahan:*\nJika Anda tidak memiliki perangkat fisik FEBOX, Anda *tidak perlu* menautkan boks. Layanan pengingat via pesan Telegram tetap dapat Anda gunakan 100%!";
         bot.sendMessage(chat_id, note, "Markdown");
     }
+}
+
+void sendRingtoneMenu(const String& chat_id) {
+    String msg;
+    msg.reserve(512);
+    msg = "🎵 *PILIHAN NADA DERING ALARM FEBOX* 🔔\n\n";
+    msg += "Nada aktif saat ini:\n";
+    msg += "▶️ *" + getRingtoneName(activeRingtoneChoice) + "*\n\n";
+    msg += "💡 *Panduan Resonansi Buzzer:*\n";
+    msg += "• *Resonansi Nyaring ⭐:* Frekuensi dinaikkan 1 oktaf (+1) agar beresonansi maksimal dan paling nyaring pada modul buzzer piezo boks.\n";
+    msg += "• *Frekuensi Asli:* Menggunakan tangga nada original standar.\n\n";
+    msg += "Silakan pilih nada dering alarm yang diinginkan:";
+
+    String kb = "["
+        "[{\"text\":\"📱 Samsung (Resonansi Nyaring ⭐)\",\"callback_data\":\"rt_0\"}],"
+        "[{\"text\":\"📱 Samsung (Frekuensi Asli)\",\"callback_data\":\"rt_1\"}],"
+        "[{\"text\":\"☎️ Nokia (Resonansi Nyaring ⭐)\",\"callback_data\":\"rt_2\"}],"
+        "[{\"text\":\"☎️ Nokia (Frekuensi Asli)\",\"callback_data\":\"rt_3\"}],"
+        "[{\"text\":\"🧪 Tes Bunyi Nada Aktif\",\"callback_data\":\"test_ringtone\"}]"
+    "]";
+
+    bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", kb);
 }
 
 void handlePairDevice(const String& chat_id, const String& from_name, String inputId) {
@@ -755,6 +865,7 @@ void sendStatus(const String& chat_id, const String& from_name) {
     if (isOwner) {
         rep += "✅ *Tertaut ke Boks Fisik (`" + deviceId + "`)*\n";
         rep += "🔊 Alarm Buzzer: *Aktif berbunyi untuk Anda*\n";
+        rep += "🎵 Nada Alarm: *" + getRingtoneName(activeRingtoneChoice) + "*\n";
     } else {
         rep += "📱 *Layanan Telegram Saja (Tanpa Boks Fisik)*\n";
         rep += "🔊 Alarm Buzzer: *Hanya notifikasi pesan Telegram*\n";
@@ -788,6 +899,7 @@ void sendHelp(const String& chat_id) {
     help += "• `/subscribe` - Aktifkan pengingat\n";
     help += "• `/unsubscribe` - Nonaktifkan pengingat\n";
     help += "• `/matikan` atau `/stop_alarm` - Matikan alarm buzzer dari jauh via Telegram\n";
+    help += "• `/nada` - Pilih nada dering alarm boks (Samsung Over the Horizon / Nokia Tune)\n";
     help += "• `/tes_alarm` - Uji coba buzzer (khusus pemilik boks)\n\n";
     help += "🔘 *Fungsi Tombol Fisik pada Boks (Pin 2):*\n";
     help += "• *1x Klik Saat Alarm Berbunyi:* Langsung mematikan buzzer alarm.\n";
@@ -1033,6 +1145,39 @@ void handleCallbackQuery(const String& chat_id, const String& from_name, const S
         bot.sendMessageWithInlineKeyboard(chat_id, msg, "Markdown", getDaysInlineKeyboard());
         return;
     }
+    else if (data == "menu_ringtone") {
+        sendRingtoneMenu(chat_id);
+        return;
+    }
+    else if (data == "test_ringtone") {
+        if (isDeviceOwner(chat_id)) {
+            bot.sendMessage(chat_id, "🧪 Memutar nada dering aktif pada boks fisik...", "");
+            playAlarmTone();
+            bot.sendMessage(chat_id, "✅ Tes nada dering selesai.", "");
+        } else {
+            bot.sendMessage(chat_id, "ℹ️ Tes suara hanya dapat dilakukan oleh pemilik boks fisik yang tertaut.", "");
+        }
+        return;
+    }
+    else if (data.startsWith("rt_")) {
+        if (!isDeviceOwner(chat_id)) {
+            bot.sendMessage(chat_id, "ℹ️ Pengaturan nada dering boks fisik hanya dapat diubah oleh pemilik boks yang tertaut.", "");
+            return;
+        }
+        int choice = data.substring(3).toInt();
+        if (choice >= 0 && choice <= 3) {
+            activeRingtoneChoice = (RingtoneChoice)choice;
+            saveRingtoneChoice();
+            String res;
+            res.reserve(256);
+            res = "✅ *Nada Dering Berhasil Diperbarui!*\n\n";
+            res += "Aktif: *" + getRingtoneName(activeRingtoneChoice) + "*\n\n";
+            res += "Memainkan pratinjau nada pada boks...";
+            bot.sendMessage(chat_id, res, "Markdown");
+            playAlarmTone();
+        }
+        return;
+    }
 
     // Aksi yang menambahkan/memperbarui data subscriber
     Subscriber* s = getOrCreateSubscriber(chat_id, from_name);
@@ -1151,6 +1296,9 @@ void handleTextMessage(const String& chat_id, const String& from_name, const Str
     }
     else if (textLower == "/matikan" || textLower == "/stop_alarm" || textLower == "/matikan_alarm" || textLower == "/diam" || textLower == "🔕 matikan alarm") {
         handleStopAlarm(chat_id, from_name);
+    }
+    else if (textLower == "/nada" || textLower == "/ringtone" || textLower == "🎵 nada dering" || textLower == "🎵 nada alarm") {
+        sendRingtoneMenu(chat_id);
     }
     else if (textLower == "/tes_alarm" || textLower == "🧪 tes alarm") {
         if (isDeviceOwner(chat_id)) {
