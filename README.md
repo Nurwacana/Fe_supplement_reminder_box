@@ -17,12 +17,14 @@ Proyek ini bersifat **inklusif**: pengguna yang memiliki perangkat boks fisik da
   - Pilihan hari: Setiap hari atau kombinasi hari tertentu (misal: Senin, Rabu, Kamis / Jumat saja).
   - Pilihan jam pengingat kustom (format `JJ:MM`, misal: `20:00` atau `06:30`).
 - **🔕 Remote Stop Alarm via Telegram**: Jika boks berdering dan berada jauh dari jangkauan, pemilik dapat mematikan alarm langsung lewat tombol inline Telegram atau perintah `/matikan`.
-- **🔘 Multifungsi Tombol Fisik (Pin 2)**:
+- **🔘 Multifungsi Tombol Fisik Non-Blocking (Pin 2)**:
   - **1x Tekan (saat alarm berbunyi)**: Langsung mematikan/membisukan alarm buzzer.
   - **3x Klik Cepat**: Mereset pengaturan Wi-Fi (membuka kembali portal konfigurasi Wi-Fi).
   - **Tahan 20 Detik**: Mereset kepemilikan perangkat (unpair) dan secara otomatis mengirim notifikasi peringatan ke Telegram pemilik lama.
-- **Sinkronisasi Waktu Akurat**: Menggunakan modul Real-Time Clock (RTC) DS3231 dengan sinkronisasi otomatis ke NTP Server (`pool.ntp.org`, GMT+7) setiap terhubung internet.
-- **Penyimpanan Permanen (NVS Flash)**: Data subscriber, jadwal, dan kepemilikan perangkat tersimpan aman di NVS ESP32 dan tidak hilang saat listrik padam atau restart.
+  - **Proteksi Anti-Freeze**: Menggunakan *finite state machine non-blocking* sehingga jika tombol tertekan lama atau short ke GND, sistem tetap beroperasi normal tanpa deadlock.
+- **Auto-Reconnect Wi-Fi & NTP Berkala**: Watchdog mandiri yang otomatis menghubungkan kembali Wi-Fi saat terputus dan menyinkronkan ulang waktu RTC DS3231 ke NTP Server setiap 24 jam.
+- **Proteksi Hardware Bus I2C**: Dilengkapi timeout 1000 ms pada jalur I2C untuk mencegah CPU hang jika koneksi modul RTC terlepas atau berderau (noisy).
+- **Penyimpanan Permanen & Kuota Aman (Maks 20 User)**: Jadwal dan kepemilikan tersimpan di NVS Flash dengan batas kuota aman 20 pengguna untuk menjamin kestabilan memori jangka panjang tanpa risiko fragmentasi Heap atau crash OOM.
 - **Keamanan Kredensial**: Token bot disimpan di file lokal yang diproteksi oleh `.gitignore`, mencegah kebocoran kunci akses ke repositori publik.
 
 ---
