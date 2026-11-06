@@ -1389,8 +1389,8 @@ void handleNewMessages(int numNewMessages) {
 // ==================== CALLBACK & RESET ====================
 
 void configModeCallback(WiFiManager *myWiFiManager) {
-    WiFi.setTxPower(WIFI_POWER_11dBm); // Daya secukupnya saat mode konfigurasi AP lokal
-    Serial.println("[Info] Mode AP Aktif (Fe-Reminder-Setup). TX Power: 11 dBm.");
+    WiFi.setTxPower(WIFI_POWER_8_5dBm); // Daya hemat 8.5 dBm untuk mencegah lonjakan arus
+    Serial.println("[Info] Mode AP Aktif (Fe-Reminder-Setup). TX Power: 8.5 dBm.");
     beep(2, 80, 80, 2000);
 }
 
@@ -1508,10 +1508,16 @@ void handlePhysicalButton() {
     // 4. Deteksi Triple Click setelah timeout jendela klik 450 ms
     if (!isButtonPressed && clickCount > 0 && (currentMillis - lastReleaseTime > 450)) {
         if (clickCount == 3) {
-            Serial.println("\n[Action] TRIPLE CLICK terdeteksi! Mereset pengaturan WiFi AP...");
+            Serial.println("\n[Action] TRIPLE CLICK terdeteksi! Menghapus data Wi-Fi dari Flash...");
             beep(3, 80, 50, 3200);
 
+            // 1. Hapus kredensial tersimpan di WiFiManager
             wm.resetSettings();
+
+            // 2. Hapus data konfigurasi Wi-Fi AP & STA dari memori Flash NVS ESP32
+            WiFi.disconnect(true, true);
+
+            Serial.println("[Action] Data Wi-Fi di Flash berhasil dihapus bersih. Merestart ke mode AP...");
             delay(1000);
             ESP.restart();
         } else {
@@ -1594,6 +1600,7 @@ void setup() {
     }
 
     WiFi.mode(WIFI_AP_STA);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm); // Batasi TX power ke 8.5 dBm agar konsumsi arus stabil dan aman
     WiFi.setSleep(true); // Aktifkan modem sleep Wi-Fi agar radio RF hemat daya dan tidak panas
 
     wm.setConfigPortalBlocking(false); // Non-blocking agar tidak mengunci sistem saat tidak ada Wi-Fi
@@ -1606,13 +1613,13 @@ void setup() {
     if (res) {
         // Beralih ke mode Station (STA) murni untuk mematikan AP internal & membebaskan resource
         WiFi.mode(WIFI_STA);
-        // Tingkatkan daya transmisi RF ke level maksimal (19.5 dBm ~80-90 mW) agar sinyal kuat menembus dinding
-        WiFi.setTxPower(WIFI_POWER_19_5dBm);
+        // Tetap gunakan daya hemat arus 8.5 dBm
+        WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
         Serial.println("\n[Sukses] Berhasil terhubung ke WiFi!");
         Serial.print("IP Address : ");
         Serial.println(WiFi.localIP());
-        Serial.println("[WiFi] Mode: WIFI_STA (Station Murni) | TX Power: 19.5 dBm (Maksimal)");
+        Serial.println("[WiFi] Mode: WIFI_STA (Station Murni) | TX Power: 8.5 dBm (Aman & Hemat Arus)");
 
         // Melodi khas terhubung Wi-Fi
         playWifiConnectedTone();
@@ -1661,7 +1668,7 @@ void loop() {
                 // Buka kembali AP agar user dapat mengakses/mengubah konfigurasi jika perlu
                 if (!wm.getConfigPortalActive()) {
                     WiFi.mode(WIFI_AP_STA);
-                    WiFi.setTxPower(WIFI_POWER_11dBm);
+                    WiFi.setTxPower(WIFI_POWER_8_5dBm);
                     wm.setConfigPortalBlocking(false);
                     wm.startConfigPortal(AP_SSID, AP_PASS);
                 }
@@ -1684,9 +1691,9 @@ void loop() {
                     wm.stopConfigPortal();
                 }
 
-                // Beralih ke Station murni dengan daya transmisi maksimal
+                // Beralih ke Station murni dengan daya hemat arus 8.5 dBm
                 WiFi.mode(WIFI_STA);
-                WiFi.setTxPower(WIFI_POWER_19_5dBm);
+                WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
                 wifiDisconnectedStart = 0;
                 digitalWrite(LED_PIN, HIGH);

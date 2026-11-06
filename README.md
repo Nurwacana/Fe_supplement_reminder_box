@@ -20,13 +20,13 @@ Proyek ini bersifat **inklusif**: pengguna yang memiliki perangkat boks fisik da
 - **🎵 Melodi Nada Dering Alarm Kustom (Samsung & Nokia)**: Menggunakan pola `RingtoneStep` pada file terpisah [`ringtones.h`](file:///D:/00_Project/Fe_supplement_reminder_box/fe_supplement_reminder_fw/include/ringtones.h) dengan pilihan motif Samsung *"Over the Horizon"* dan *"Nokia Tune"*, tersedia pilihan frekuensi asli dan nada resonansi tinggi (+1 oktaf) yang dioptimalkan untuk kekerasan suara maksimal pada buzzer piezo. Dijalankan pada *Dedicated FreeRTOS Task* dengan penjadwalan preemptive independen sehingga timing nada dan jeda melodi berbunyi sangat presisi tanpa terganggu (*jitter-free*) oleh lalu lintas jaringan HTTPS Telegram. Nada dapat diatur & dites langsung via perintah `/nada`.
 - **🔘 Multifungsi Tombol Fisik Non-Blocking (Pin 2)**:
   - **1x Tekan (saat alarm berbunyi)**: Langsung mematikan/membisukan alarm buzzer.
-  - **3x Klik Cepat**: Mereset pengaturan Wi-Fi (membuka kembali portal konfigurasi Wi-Fi).
+  - **3x Klik Cepat**: Mereset pengaturan Wi-Fi (menghapus bersih data SSID/password dari Flash NVS & restart ke mode AP).
   - **Tahan 20 Detik**: Mereset kepemilikan perangkat (unpair) dan secara otomatis mengirim notifikasi peringatan ke Telegram pemilik lama.
   - **Proteksi Anti-Freeze**: Menggunakan *finite state machine non-blocking* sehingga jika tombol tertekan lama atau short ke GND, sistem tetap beroperasi normal tanpa deadlock.
-- **Auto-Reconnect Simultan & AP Failover Non-Blocking**: Saat koneksi Wi-Fi terputus, boks secara otomatis membuka kembali hotspot AP portal (`Fe-Reminder-Setup`) agar dapat dikonfigurasi ulang oleh pengguna via browser, sekaligus secara simultan terus mencoba menyambung kembali (*auto-reconnect*) ke router tersimpan di latar belakang. Begitu sinyal router pulih, hotspot AP otomatis ditutup, boks beralih ke `WIFI_STA` (19.5 dBm), dan waktu NTP disinkronkan berkala setiap 1 jam untuk menjaga presisi tinggi RTC DS3231.
+- **Auto-Reconnect Simultan & AP Failover Non-Blocking**: Saat koneksi Wi-Fi terputus, boks secara otomatis membuka kembali hotspot AP portal (`Fe-Reminder-Setup`) agar dapat dikonfigurasi ulang oleh pengguna via browser, sekaligus secara simultan terus mencoba menyambung kembali (*auto-reconnect*) ke router tersimpan di latar belakang. Begitu sinyal router pulih, hotspot AP otomatis ditutup, boks beralih ke `WIFI_STA`, dan waktu NTP disinkronkan berkala setiap 1 jam untuk menjaga presisi tinggi RTC DS3231.
 - **Proteksi Hardware Bus I2C**: Dilengkapi timeout 1000 ms pada jalur I2C untuk mencegah CPU hang jika koneksi modul RTC terlepas atau berderau (noisy).
 - **Penyimpanan Permanen & Kuota Aman (Maks 20 User)**: Jadwal dan kepemilikan tersimpan di NVS Flash dengan batas kuota aman 20 pengguna untuk menjamin kestabilan memori jangka panjang tanpa risiko fragmentasi Heap atau crash OOM.
-- **Efisiensi Daya, Jangkauan Maksimal & Polling Cerdas**: Beroperasi pada mode *Station Murni* (`WIFI_STA`) dengan daya pancar RF maksimal (**19.5 dBm**) agar sinyal kuat menembus dinding dan jangkauan luas, dipadukan 802.11 Wi-Fi modem sleep dan throttling FreeRTOS CPU idle delay (15 ms) sehingga konsumsi arus hemat dan temperatur chip dingin (~40°C), serta respon bot Telegram sangat cepat via Adaptive Polling (800 ms/1000 ms/1500 ms).
+- **Efisiensi Daya, Hemat Arus (8.5 dBm) & Polling Cerdas**: Menggunakan daya pancar RF terkontrol (**8.5 dBm**) guna mencegah lonjakan arus catu daya (*anti-brownout*) dan panas chip, dipadukan mode *Station Murni* (`WIFI_STA`), 802.11 Wi-Fi modem sleep, serta throttling FreeRTOS CPU idle delay (15 ms) sehingga konsumsi arus sangat hemat dan chip tetap dingin (~40°C), serta respon bot Telegram sangat cepat via Adaptive Polling (800 ms/1000 ms/1500 ms).
 - **Skema Partisi Flash 3 MB (`huge_app.csv`)**: Kapasitas alokasi partisi firmware diperbesar dari 1.25 MB menjadi 3 MB (utilisasi turun dari 84% menjadi **34.9%**), menyisakan ruang memori yang sangat longgar untuk stabilitas dan ekspansi.
 - **Keamanan Kredensial**: Token bot disimpan di file lokal yang diproteksi oleh `.gitignore`, mencegah kebocoran kunci akses ke repositori publik.
 
@@ -170,7 +170,7 @@ Saat waktu pengingat tiba dan alarm berbunyi:
 | Aksi | Kondisi | Fungsi | Indikasi |
 | :--- | :--- | :--- | :--- |
 | **1x Tekan Singkat** | Alarm sedang berbunyi | Mematikan alarm buzzer seketika | Buzzer langsung mati |
-| **3x Klik Cepat** | Alarm diam (< 450 ms interval) | Mereset konfigurasi Wi-Fi (kembali ke mode AP) | LED berkedip cepat & ESP restart ke AP `Fe-Reminder-Setup` |
+| **3x Klik Cepat** | Alarm diam (< 450 ms interval) | Menghapus data Wi-Fi dari Flash & restart ke mode AP | 3x beep ceria & ESP restart membuka AP `Fe-Reminder-Setup` |
 | **Tahan 20 Detik** | Alarm diam | Mereset kepemilikan box (unpair) | Terdengar *beep* di detik 5, 10, 15, lalu 3 *beep* panjang + notifikasi ke Telegram pemilik lama |
 
 ---
