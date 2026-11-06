@@ -1386,8 +1386,8 @@ void handleNewMessages(int numNewMessages) {
 // ==================== CALLBACK & RESET ====================
 
 void configModeCallback(WiFiManager *myWiFiManager) {
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    Serial.println("[Info] Mode AP Aktif. TX Power diset ke 8.5 dBm.");
+    WiFi.setTxPower(WIFI_POWER_11dBm); // Daya secukupnya saat mode konfigurasi AP lokal
+    Serial.println("[Info] Mode AP Aktif (Fe-Reminder-Setup). TX Power: 11 dBm.");
     beep(2, 80, 80, 2000);
 }
 
@@ -1592,7 +1592,6 @@ void setup() {
     }
 
     WiFi.mode(WIFI_AP_STA);
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     WiFi.setSleep(true); // Aktifkan modem sleep Wi-Fi agar radio RF hemat daya dan tidak panas
 
     WiFiManager wm;
@@ -1608,9 +1607,15 @@ void setup() {
         delay(2000);
         ESP.restart();
     } else {
+        // Beralih ke mode Station (STA) murni untuk mematikan AP internal & membebaskan resource
+        WiFi.mode(WIFI_STA);
+        // Tingkatkan daya transmisi RF ke level maksimal (19.5 dBm ~80-90 mW) agar sinyal kuat menembus dinding
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
         Serial.println("\n[Sukses] Berhasil terhubung ke WiFi!");
         Serial.print("IP Address : ");
         Serial.println(WiFi.localIP());
+        Serial.println("[WiFi] Mode: WIFI_STA (Station Murni) | TX Power: 19.5 dBm (Maksimal)");
 
         // Melodi khas terhubung Wi-Fi
         playWifiConnectedTone();
@@ -1656,6 +1661,8 @@ void loop() {
         } else {
             if (wifiDisconnectedStart != 0) {
                 Serial.printf("[WiFi] Terhubung kembali! IP: %s\n", WiFi.localIP().toString().c_str());
+                WiFi.mode(WIFI_STA);
+                WiFi.setTxPower(WIFI_POWER_19_5dBm);
                 wifiDisconnectedStart = 0;
                 digitalWrite(LED_PIN, HIGH);
                 playWifiConnectedTone(); // Melodi ceria saat koneksi pulih
