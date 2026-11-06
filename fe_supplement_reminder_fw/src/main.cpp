@@ -68,6 +68,9 @@ const int   daylightOffset_sec = 0;
 WiFiClientSecure secured_client;
 UniversalTelegramBot bot(BOT_TOKEN, secured_client);
 
+// Pengelola Wi-Fi & Captive Portal
+WiFiManager wm;
+
 // ==================== STRUKTUR DATA SUBSCRIBER & JADWAL ====================
 
 struct Subscriber {
@@ -1508,7 +1511,6 @@ void handlePhysicalButton() {
             Serial.println("\n[Action] TRIPLE CLICK terdeteksi! Mereset pengaturan WiFi AP...");
             beep(3, 80, 50, 3200);
 
-            WiFiManager wm;
             wm.resetSettings();
             delay(1000);
             ESP.restart();
@@ -1594,19 +1596,14 @@ void setup() {
     WiFi.mode(WIFI_AP_STA);
     WiFi.setSleep(true); // Aktifkan modem sleep Wi-Fi agar radio RF hemat daya dan tidak panas
 
-    WiFiManager wm;
+    wm.setConfigPortalBlocking(false); // Non-blocking agar tidak mengunci sistem saat tidak ada Wi-Fi
     wm.setAPCallback(configModeCallback);
-    wm.setConnectTimeout(15);
-    wm.setConfigPortalTimeout(180);
+    wm.setConnectTimeout(10); // Coba sambung ke router tersimpan selama 10 detik
+    wm.setConfigPortalTimeout(0); // Jangan timeout, biarkan portal tetap buka jika belum tersambung
 
     bool res = wm.autoConnect(AP_SSID, AP_PASS);
 
-    if (!res) {
-        Serial.println("[Error] WiFi timeout / gagal connect.");
-        beep(1, 1000, 0, 1200);
-        delay(2000);
-        ESP.restart();
-    } else {
+    if (res) {
         // Beralih ke mode Station (STA) murni untuk mematikan AP internal & membebaskan resource
         WiFi.mode(WIFI_STA);
         // Tingkatkan daya transmisi RF ke level maksimal (19.5 dBm ~80-90 mW) agar sinyal kuat menembus dinding
@@ -1624,15 +1621,17 @@ void setup() {
         // Sinkronisasi awal waktu NTP ke RTC saat baru terhubung Wi-Fi
         Serial.println("[NTP] Sinkronisasi awal saat baru terhubung Wi-Fi...");
         syncNTPtoRTC();
-
-        // Lewati validasi sertifikat SSL agar hemat RAM dan koneksi cepat
-        secured_client.setInsecure();
-
-        // Tingkatkan buffer pesan & timeout UniversalTelegramBot
-        // Default 1500 byte menyebabkan gagal parse (NoMemory) pada callback query dengan inline keyboard besar
-        bot.maxMessageLength = 8192;
-        bot.waitForResponse = 2500;
+    } else {
+        Serial.println("[WiFi] Belum terhubung ke router. AP 'Fe-Reminder-Setup' aktif & autoconnect berjalan di latar belakang...");
+        digitalWrite(LED_PIN, LOW);
     }
+
+    // Lewati validasi sertifikat SSL agar hemat RAM dan koneksi cepat
+    secured_client.setInsecure();
+
+    // Tingkatkan buffer pesan & timeout UniversalTelegramBot
+    bot.maxMessageLength = 8192;
+    bot.waitForResponse = 2500;
 }
 
 // ==================== LOOP ====================
@@ -1641,32 +1640,59 @@ void loop() {
     handlePhysicalButton();
     // Melodi alarm buzzer berputar di FreeRTOS task independen (alarmBuzzerTask) dengan presisi mikrodetik
 
+    // Layani webserver captive portal & DNS jika AP sedang aktif
+    wm.process();
+
     // 0. Wi-Fi Watchdog & Auto-Reconnect non-blocking
     static unsigned long lastWifiCheck = 0;
     static unsigned long wifiDisconnectedStart = 0;
+    static unsigned long lastReconnectAttempt = 0;
     static unsigned long lastNtpRetry = 0;
 
-    if (millis() - lastWifiCheck >= 3000) {
+    if (millis() - lastWifiCheck >= 2000) {
         lastWifiCheck = millis();
         if (WiFi.status() != WL_CONNECTED) {
+            // A. Jika baru terputus:
             if (wifiDisconnectedStart == 0) {
                 wifiDisconnectedStart = millis();
-                Serial.println("[WiFi] Koneksi terputus! Memulai monitoring reconnection...");
+                Serial.println("[WiFi] Koneksi terputus! Mengaktifkan AP 'Fe-Reminder-Setup' & auto-reconnect...");
                 digitalWrite(LED_PIN, LOW);
-            } else if (millis() - wifiDisconnectedStart >= 12000) {
-                Serial.println("[WiFi] Mencoba menyambung kembali (WiFi.reconnect())...");
+
+                // Buka kembali AP agar user dapat mengakses/mengubah konfigurasi jika perlu
+                if (!wm.getConfigPortalActive()) {
+                    WiFi.mode(WIFI_AP_STA);
+                    WiFi.setTxPower(WIFI_POWER_11dBm);
+                    wm.setConfigPortalBlocking(false);
+                    wm.startConfigPortal(AP_SSID, AP_PASS);
+                }
+            }
+
+            // B. Tetap jalankan autoconnect / reconnect secara berkala (setiap 8 detik) di latar belakang!
+            if (millis() - lastReconnectAttempt >= 8000) {
+                lastReconnectAttempt = millis();
+                Serial.println("[WiFi] Mencoba autoconnect kembali ke router (WiFi.reconnect())...");
                 WiFi.reconnect();
-                wifiDisconnectedStart = millis(); // jeda 12 detik antar percobaan
             }
         } else {
-            if (wifiDisconnectedStart != 0) {
-                Serial.printf("[WiFi] Terhubung kembali! IP: %s\n", WiFi.localIP().toString().c_str());
+            // C. Begitu Wi-Fi berhasil terhubung kembali:
+            if (wifiDisconnectedStart != 0 || wm.getConfigPortalActive()) {
+                Serial.printf("\n[WiFi] Terhubung kembali ke router! IP: %s\n", WiFi.localIP().toString().c_str());
+
+                // Tutup AP Config Portal karena sudah sukses terhubung ke router
+                if (wm.getConfigPortalActive()) {
+                    Serial.println("[WiFi] Menutup AP Config Portal...");
+                    wm.stopConfigPortal();
+                }
+
+                // Beralih ke Station murni dengan daya transmisi maksimal
                 WiFi.mode(WIFI_STA);
                 WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
                 wifiDisconnectedStart = 0;
                 digitalWrite(LED_PIN, HIGH);
                 playWifiConnectedTone(); // Melodi ceria saat koneksi pulih
-                // Jika koneksi pulih dan belum sinkron atau sudah waktunya, sinkronkan
+
+                // Sinkronisasi NTP jika diperlukan
                 if (!ntpSynchronized || (millis() - lastNtpPeriodicSync >= NTP_SYNC_INTERVAL)) {
                     Serial.println("[NTP] Wi-Fi pulih, melakukan sinkronisasi NTP...");
                     syncNTPtoRTC();
